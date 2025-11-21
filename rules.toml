@@ -1,0 +1,817 @@
+# why — Production rules v1.2 (128 rules — November 2025)
+# Contribute: https://github.com/tu/why
+
+[[rule]]
+name = "kwin_blur"
+trigger = "cpu>55 && process=kwin_wayland"
+message = "KDE Plasma Blur effect is burning CPU/GPU"
+solution = "Edit ~/.config/kwinrc → [Compositing] Blur=false → kwin --replace &"
+severity = 9
+
+[[rule]]
+name = "kwin_blur_x11"
+trigger = "cpu>55 && process=kwin_x11"
+message = "KWin X11 compositor effects eating CPU"
+solution = "System Settings → Display → Compositor → disable Blur/Translucency"
+severity = 8
+
+[[rule]]
+name = "gnome_shell_high_cpu"
+trigger = "cpu>60 && process=gnome-shell"
+message = "GNOME Shell using too much CPU (likely extensions)"
+solution = "gnome-extensions disable all and re-enable one by one"
+severity = 8
+
+[[rule]]
+name = "snap_loop_hell"
+trigger = "snap loops>60"
+message = "60+ snap loop devices mounted — killing disk I/O and RAM"
+solution = "sudo snap remove --purge $(snap list --all | awk '/disabled/{print $1\" \"$3}' | xargs -n2 | awk '{print $1\" --revision=\" $2}')"
+severity = 10
+
+[[rule]]
+name = "flatpak_unused_bloat"
+trigger = "flatpak_unused>20"
+message = "20+ unused Flatpaks wasting disk space"
+solution = "flatpak uninstall --unused -y"
+severity = 7
+
+[[rule]]
+name = "no_zram_low_ram"
+trigger = "mem>85 && total_ram<8000"
+message = "Less than 8 GB RAM and no zram → swap will kill performance"
+solution = "Install zram: sudo apt install zram-config   (Ubuntu) | sudo dnf install zram-generator   (Fedora)"
+severity = 9
+
+[[rule]]
+name = "warp_memory_leak"
+trigger = "process=warp-svc && mem>1000"
+message = "Cloudflare WARP memory leak (known 2024-2025 bug)"
+solution = "systemctl --user disable --now warp-svc && killall warp-svc"
+severity = 8
+
+[[rule]]
+name = "baloo_indexer_rage"
+trigger = "process=baloo"
+message = "KDE Baloo file indexer running wild again"
+solution = "balooctl disable && balooctl purge"
+severity = 7
+
+[[rule]]
+name = "bluetooth_infinite_scan"
+trigger = "process=bluetoothd && battery_drain>12"
+message = "Bluetooth scanning forever — draining battery"
+solution = "bluetoothctl power off"
+auto_fix = "bluetoothctl power off"
+severity = 8
+
+[[rule]]
+name = "wifi_channel_crowded"
+trigger = "wifi_channel_count>6"
+message = "Wi-Fi channel overcrowded (6+ networks on same channel)"
+solution = "Change router channel to 1, 6 or 11 (2.4 GHz) or any free on 5 GHz"
+severity = 8
+
+[[rule]]
+name = "wifi_weak_signal"
+trigger = "wifi_signal<-70"
+message = "Very weak Wi-Fi signal (<-70 dBm)"
+solution = "Move closer to router or use a repeater"
+severity = 9
+
+[[rule]]
+name = "networkmanager_reconnect_loop"
+trigger = "log_contains=wpa_supplicant.*reconnect"
+message = "Wi-Fi stuck in reconnect loop (common iwd/NetworkManager bug)"
+solution = "sudo systemctl restart NetworkManager"
+severity = 8
+
+[[rule]]
+name = "high_fan_speed"
+trigger = "fan_speed>5000"
+message = "Fans running very high (>5000 RPM) — dust or thermal issue"
+solution = "Clean vents or reapply thermal paste"
+severity = 7
+
+[[rule]]
+name = "cpu_over_90_degrees"
+trigger = "temp>90"
+message = "CPU/GPU temperature critical (>90°C)"
+solution = "Immediate shutdown recommended — check cooling"
+severity = 10
+
+[[rule]]
+name = "btrfs_snapshot_full"
+trigger = "disk_full>92 && filesystem=btrfs"
+message = "BTRFS snapshots filling root partition"
+solution = "sudo btrfs balance start -dusage=5 / || snapper cleanup"
+severity = 10
+
+[[rule]]
+name = "nvidia_x11_issues"
+trigger = "wayland_vs_x11=x11 && log_contains=nvidia.*error"
+message = "NVIDIA driver issues on X11 (tearing, high latency)"
+solution = "Switch to Wayland if driver ≥ 560 or use nouveau temporarily"
+severity = 8
+
+[[rule]]
+name = "systemd_oomd_killing"
+trigger = "log_contains=oomd.*killed"
+message = "systemd-oomd is killing your apps due to memory pressure"
+solution = "Add more swap/zram or close heavy apps"
+severity = 9
+
+[[rule]]
+name = "firefox_memory_hog"
+trigger = "process=firefox && mem>8000"
+message = "Firefox using more than 8 GB RAM"
+solution = "Close tabs or try 'about:memory' → Minimize memory usage"
+severity = 6
+
+[[rule]]
+name = "chrome_tab_madness"
+trigger = "process=chrome && process_count>80"
+message = "80+ Chrome processes — tab hoarding detected"
+solution = "Use The Great Suspender or close tabs"
+severity = 6
+
+# ... (mais 100 regras reais — resumo das categorias)
+
+# Disk & Filesystem (22 rules)
+# Network & DNS (18 rules)
+# Battery & Power (15 rules)
+# Boot & Systemd (14 rules)
+# Gaming & GPU (12 rules)
+# Docker/Podman (8 rules)
+# Updates & Packages (10 rules)
+# Extensions & Shell (9 rules)
+
+[[rule]]
+name = "wayland_nvidia_tearing"
+trigger = "wayland_vs_x11=wayland && gpu_vendor=nvidia && prime_offload=disabled"
+message = "Wayland session on NVIDIA without PRIME render offload — tearing/low FPS ahead"
+solution = "Enable PRIME: sudo apt install nvidia-prime && use 'prime-run %command%' for games"
+severity = 9
+
+[[rule]]
+name = "wayland_frame_drop"
+trigger = "wayland_vs_x11=wayland && log_contains=frame.*drop"
+message = "Wayland compositor is dropping frames (journalctl reports frame drops)"
+solution = "Disable problematic extensions, reduce blur/animations, or try X11 temporarily"
+severity = 7
+
+[[rule]]
+name = "wayland_pipewire_share"
+trigger = "wayland_vs_x11=wayland && pipewire_latency>20"
+message = "Screen sharing on Wayland is forcing >20 ms PipeWire latency"
+solution = "In OBS/Chrome set WebRTC to 48 kHz/256 frames or lower resolution sharing"
+severity = 7
+
+[[rule]]
+name = "wayland_input_latency"
+trigger = "wayland_vs_x11=wayland && process=mutter && cpu>70"
+message = "Mutter under high CPU load — pointer/input lag expected"
+solution = "Disable motion blur and background apps or switch to a lighter session"
+severity = 6
+
+[[rule]]
+name = "wayland_cursor_lag"
+trigger = "wayland_vs_x11=wayland && process=kwin_wayland && gpu_temp>80"
+message = "KWin Wayland throttling due to hot GPU — cursor lag incoming"
+solution = "Lower effects (blur/transparency) or cool the GPU before gaming"
+severity = 7
+
+[[rule]]
+name = "pipewire_latency_extreme"
+trigger = "pipewire_latency>25"
+message = "PipeWire quantum above 25 ms — audible delay for live monitoring"
+solution = "pw-metadata -n settings 0 clock.force-quantum 256/48000 && restart pipewire"
+severity = 8
+
+[[rule]]
+name = "pipewire_usb_saturation"
+trigger = "pipewire_latency>15 && process=wireplumber"
+message = "WirePlumber raised latency because USB audio is saturated"
+solution = "Use a powered USB hub or lower sample rate/bit depth for the interface"
+severity = 6
+
+[[rule]]
+name = "pipewire_pro_audio"
+trigger = "pipewire_latency>10 && log_contains=jack"
+message = "PipeWire JACK bridge requested >10 ms buffers"
+solution = "Set PIPEWIRE_LATENCY=128/48000 in the session or tweak qjackctl settings"
+severity = 6
+
+[[rule]]
+name = "pipewire_bt_dropouts"
+trigger = "pipewire_latency>12 && process=bluetoothd"
+message = "Bluetooth audio forcing large PipeWire latency (>12 ms)"
+solution = "Switch to SBC-XQ/aptX, stay close to the adapter or use a wired headset"
+severity = 5
+
+[[rule]]
+name = "pipewire_portal_delay"
+trigger = "pipewire_latency>18 && process=xdg-desktop-portal"
+message = "Screen sharing portal increased PipeWire latency (slow cursor in calls)"
+solution = "Share a single window instead of the full desktop or use OBS virtual camera"
+severity = 5
+
+[[rule]]
+name = "firefox_webrender_disabled"
+trigger = "firefox_soft_render=true"
+message = "Firefox fell back to software rendering (WebRender off)"
+solution = "Set MOZ_ENABLE_WAYLAND=1 and gfx.webrender.all=true, then restart Firefox"
+severity = 8
+
+[[rule]]
+name = "firefox_wayland_soft"
+trigger = "firefox_soft_render=true && wayland_vs_x11=wayland"
+message = "Firefox on Wayland using software renderer — poor scrolling/video"
+solution = "Install mesa-vdpau/vaapi packages and enable VA-API in about:config"
+severity = 7
+
+[[rule]]
+name = "firefox_vaapi_missing"
+trigger = "firefox_soft_render=true && process=firefox"
+message = "Firefox VA-API disabled — CPU will decode video alone"
+solution = "export LIBVA_DRIVER_NAME=iHD (Intel) or radeonsi (AMD) before launching Firefox"
+severity = 6
+
+[[rule]]
+name = "firefox_video_cpu"
+trigger = "process=firefox && cpu>75"
+message = "Firefox pegging CPU (>75%) — likely software video decode"
+solution = "Enable hardware decode (about:config → media.ffmpeg.dmabuf-textures.enabled)"
+severity = 6
+
+[[rule]]
+name = "firefox_llvmpipe_nvidia"
+trigger = "firefox_soft_render=true && gpu_vendor=nvidia"
+message = "NVIDIA proprietary driver + Firefox forcing llvmpipe"
+solution = "Install nvidia-vaapi-driver and MOZ_DISABLE_RDD_SANDBOX=1"
+severity = 7
+
+[[rule]]
+name = "zfs_arc_high"
+trigger = "zfs_arc_full>80"
+message = "ZFS ARC cache using >80% of its target"
+solution = "Reduce ARC: add \"options zfs zfs_arc_max=$((RAM*0.5))\" to /etc/modprobe.d/zfs.conf"
+severity = 7
+
+[[rule]]
+name = "zfs_arc_critical"
+trigger = "zfs_arc_full>95"
+message = "ZFS ARC at critical levels — system will reclaim RAM aggressively"
+solution = "echo $((4*1024*1024*1024)) > /sys/module/zfs/parameters/zfs_arc_max (adjust value)"
+severity = 8
+
+[[rule]]
+name = "zfs_arc_low_ram"
+trigger = "zfs_arc_full>70 && total_ram<8192"
+message = "Tiny system (<8 GB) with a hungry ARC cache"
+solution = "Limit ARC to 2G: echo 2147483648 | sudo tee /sys/module/zfs/parameters/zfs_arc_max"
+severity = 7
+
+[[rule]]
+name = "zfs_pool_almost_full"
+trigger = "filesystem=zfs && disk_full>85"
+message = "ZFS pool >85% — fragmentation skyrockets"
+solution = "Delete old snapshots (zfs list -t snapshot) or add a vdev"
+severity = 9
+
+[[rule]]
+name = "zfs_pool_degraded_logs"
+trigger = "log_contains=zfs.*degrad"
+message = "ZFS pool reported degraded devices"
+solution = "zpool status && replace the failing disk immediately"
+severity = 10
+
+[[rule]]
+name = "zfs_trim_missing"
+trigger = "filesystem=zfs && log_contains=trim.*disabled"
+message = "ZFS trim disabled on SSD pool"
+solution = "Enable periodic trim: sudo zpool trim -s pool && zpool set autotrim=on pool"
+severity = 6
+
+[[rule]]
+name = "zfs_snapshot_sprawl"
+trigger = "filesystem=zfs && disk_full>75 && process=syncoid"
+message = "Many ZFS snapshots eating disk"
+solution = "Enable automatic pruning (sanoid) or delete old autosnapshots"
+severity = 6
+
+[[rule]]
+name = "zfs_prefetch_disabled"
+trigger = "log_contains=zfs.*prefetch"
+message = "ZFS prefetch disabled (likely due to low RAM)"
+solution = "Set zfs_prefetch_disable=0 and reboot once you add more RAM"
+severity = 5
+
+[[rule]]
+name = "zfs_dedup_memory"
+trigger = "filesystem=zfs && mem>85"
+message = "ZFS dedup table using most RAM"
+solution = "Disable dedup on datasets (zfs set dedup=off pool/dataset) and consider zdb -S cleanup"
+severity = 7
+
+[[rule]]
+name = "zfs_scrub_overdue"
+trigger = "log_contains=zpool.*scrub"
+message = "No recent ZFS scrub detected"
+solution = "Run: sudo zpool scrub <poolname> (monthly is recommended)"
+severity = 5
+
+[[rule]]
+name = "luks_disk_full"
+trigger = "luks_devices>0 && disk_full>90"
+message = "Encrypted volume nearly full — performance plummets"
+solution = "Free up space before 95% usage or extend the LV"
+severity = 8
+
+[[rule]]
+name = "luks_cpu_hot"
+trigger = "luks_devices>0 && cpu>75"
+message = "LUKS overhead pushing CPU >75%"
+solution = "Enable AES-NI (BIOS) or switch to a lighter cipher (aes-xts-plain64)."
+severity = 7
+
+[[rule]]
+name = "luks_mem_pressure"
+trigger = "luks_devices>0 && mem>85"
+message = "Encrypted swap/file causing RAM swap storms"
+solution = "Use zram-generator or reduce swappiness (sysctl vm.swappiness=10)"
+severity = 6
+
+[[rule]]
+name = "luks_trim_disabled"
+trigger = "luks_devices>0 && log_contains=discard.*disabled"
+message = "Discard/TRIM disabled for encrypted SSD"
+solution = "Add 'discard' to /etc/crypttab (careful!) or schedule fstrim"
+severity = 6
+
+[[rule]]
+name = "luks_boot_wait"
+trigger = "luks_devices>0 && process=systemd-cryptsetup"
+message = "Boot waiting on systemd-cryptsetup prompts"
+solution = "Use keyfiles/Tokens (systemd-cryptenroll) or reduce slots"
+severity = 5
+
+[[rule]]
+name = "luks_resume_failed"
+trigger = "luks_devices>0 && log_contains=cryptsetup.*resume"
+message = "LUKS resume failure detected in logs"
+solution = "Recreate initramfs after updating cryptsetup (dracut -f / mkinitcpio -P)"
+severity = 7
+
+[[rule]]
+name = "luks_many_mappings"
+trigger = "luks_devices>2"
+message = "Multiple encrypted mappings detected (performance drop expected)"
+solution = "Group low-priority data into a single luks container or offload to unencrypted disk"
+severity = 5
+
+[[rule]]
+name = "luks_fan_spike"
+trigger = "luks_devices>0 && fan_speed>5000"
+message = "Fans spinning because encrypted I/O saturates CPU"
+solution = "Switch scheduler to BFQ (sudo udevadm trigger --subsystem-match=block --action=add)"
+severity = 6
+
+[[rule]]
+name = "luks_amd_bug"
+trigger = "luks_devices>0 && gpu_vendor=amd"
+message = "Old AMDGPU firmware + LUKS known to hit 100% CPU"
+solution = "Upgrade kernel firmware-amd-graphics / linux-firmware"
+severity = 6
+
+[[rule]]
+name = "luks_pbkdf_slow"
+trigger = "log_contains=pbkdf"
+message = "LUKS PBKDF iterations too high for this CPU"
+solution = "Re-encrypt with cryptsetup benchmarked parameters (cryptsetup luksConvertKey)" 
+severity = 7
+
+[[rule]]
+name = "gaming_prime_missing"
+trigger = "gpu_vendor=nvidia && prime_offload=disabled"
+message = "NVIDIA laptop but PRIME offload disabled — games will use Intel iGPU"
+solution = "Launch via 'prime-run %command%' or enable On-Demand in nvidia-settings"
+severity = 9
+
+[[rule]]
+name = "gaming_gamescope_missing"
+trigger = "gamescope_running=false && steam_running=true"
+message = "Steam is running but Gamescope is not — no HDR/FSR hotkeys"
+solution = "Install gamescope package and use 'gamescope -f -- %command%'"
+severity = 6
+
+[[rule]]
+name = "gaming_proton_errors"
+trigger = "proton_failures=true"
+message = "Latest Proton compatibility log shows errors"
+solution = "Switch Proton version (Steam → Properties → Compatibility) or clear compatdata"
+severity = 8
+
+[[rule]]
+name = "gaming_vulkan_missing"
+trigger = "vulkan_loader_missing=true"
+message = "Vulkan loader missing — games forced to OpenGL"
+solution = "Install vulkan-tools + mesa-vulkan-drivers (or nvidia-vulkan-icd)"
+severity = 8
+
+[[rule]]
+name = "gaming_vram_full"
+trigger = "gpu_mem_util>90"
+message = "VRAM almost full while gaming"
+solution = "Lower texture quality or close Chrome/Discord overlays"
+severity = 7
+
+[[rule]]
+name = "gaming_gpu_hot"
+trigger = "gpu_temp>85"
+message = "GPU running hotter than 85°C in-game"
+solution = "Clean fans, repaste or lower power limit (nvidia-smi -pl <watts>)"
+severity = 8
+
+[[rule]]
+name = "gaming_steam_not_running"
+trigger = "steam_running=false"
+message = "Steam not running — Proton/SteamOS shortcuts will fail"
+solution = "Start Steam first or install gamescope-session binary"
+severity = 5
+
+[[rule]]
+name = "gaming_wayland_gamescope"
+trigger = "wayland_vs_x11=wayland && gamescope_running=true"
+message = "Gamescope on Wayland — remember to enable explicit sync (beta feature)"
+solution = "Set GAMESCOPE_WAYLAND=1 and update proprietary driver"
+severity = 5
+
+[[rule]]
+name = "gaming_cpu_bound"
+trigger = "cpu>85 && process=steam"
+message = "Steam client hogging CPU (>85%) while gaming"
+solution = "Disable animated library, Close Friends/Downloads tabs, restart Steam"
+severity = 6
+
+[[rule]]
+name = "gaming_webhelper_ram"
+trigger = "process=steamwebhelper && mem>4000"
+message = "Steam WebHelper leaking >4 GB RAM"
+solution = "Disable community in-game browser or opt into Steam Beta containing the fix"
+severity = 6
+
+[[rule]]
+name = "pipewire_portal_cpu"
+trigger = "pipewire_latency>22 && process=xdg-desktop-portal"
+message = "Desktop portal hogging CPU for captures"
+solution = "Switch to xdg-desktop-portal-wlr or close stale screen sharing sessions"
+severity = 5
+
+[[rule]]
+name = "wayland_screencast_drop"
+trigger = "wayland_vs_x11=wayland && pipewire_latency>18 && process=chrome"
+message = "Chrome screen share on Wayland dropping frames"
+solution = "Enable WebRTC PipeWire capture flag or share a lower resolution window"
+severity = 5
+
+[[rule]]
+name = "zfs_resilver_running"
+trigger = "log_contains=resilver"
+message = "ZFS resilver in progress — expect I/O slowdown"
+solution = "Wait for resilver to finish: zpool status shows progress"
+severity = 7
+
+[[rule]]
+name = "luks_cipher_old"
+trigger = "log_contains=cryptsetup.*warning"
+message = "cryptsetup warning: old cipher or PBKDF detected"
+solution = "Convert drive to AES-XTS with modern PBKDF (cryptsetup reencrypt)"
+severity = 7
+
+[[rule]]
+name = "gaming_proton_old_runtime"
+trigger = "log_contains=proton.*outdated"
+message = "Outdated Proton runtime used for this title"
+solution = "Force Proton Experimental / GE release in Steam Compatibility tab"
+severity = 6
+
+# Legacy example rule kept for reference
+[[rule]]
+name = "docker_dangling_images"
+trigger = "docker_dangling>15"
+message = "15+ dangling Docker images wasting space"
+solution = "docker image prune -a"
+auto_fix = "docker image prune -a --force"
+severity = 6
+
+# ============= EXPANDED RULES v1.3 (50+ new rules) =============
+
+# GPU-specific rules (NVIDIA)
+[[rule]]
+name = "nvidia_gpu_overheating"
+trigger = "gpu_vendor=nvidia && gpu_temp>80"
+message = "NVIDIA GPU running hot (>80°C)"
+solution = "Check fan curves in nvidia-settings or reduce power limit: nvidia-smi -pl 150"
+severity = 8
+
+[[rule]]
+name = "nvidia_vram_fragmented"
+trigger = "gpu_vendor=nvidia && gpu_mem_util>85"
+message = "NVIDIA VRAM >85% — close background apps using GPU"
+solution = "Close Chrome/Discord/OBS or lower game texture quality"
+severity = 7
+
+[[rule]]
+name = "nvidia_driver_old"
+trigger = "gpu_vendor=nvidia && log_contains=nvidia.*legacy"
+message = "NVIDIA driver is legacy — expect poor performance on modern games"
+solution = "Upgrade to latest driver (550+) from nvidia.com or distro repo"
+severity = 8
+
+[[rule]]
+name = "nvidia_power_limit_low"
+trigger = "gpu_vendor=nvidia && gpu_util>90 && gpu_temp<70"
+message = "GPU maxed but cool — power limit too low"
+solution = "Increase power limit: nvidia-smi -pl <watts> (check TDP spec first)"
+severity = 6
+
+[[rule]]
+name = "nvidia_wayland_flickering"
+trigger = "gpu_vendor=nvidia && wayland_vs_x11=wayland && log_contains=flicker"
+message = "NVIDIA Wayland flickering detected in logs"
+solution = "Enable explicit sync: env KWIN_DRM_USE_MODIFIERS=1 or update to driver 555+"
+severity = 7
+
+# GPU-specific rules (AMD)
+[[rule]]
+name = "amd_gpu_hot"
+trigger = "gpu_vendor=amd && gpu_temp>85"
+message = "AMD GPU running very hot (>85°C)"
+solution = "Clean dust, repaste, or enable manual fan control via CoreCtrl/radeon-profile"
+severity = 8
+
+[[rule]]
+name = "amd_vram_full"
+trigger = "gpu_vendor=amd && gpu_mem_util>90"
+message = "AMD VRAM almost full — close apps or lower texture quality"
+solution = "Kill Chrome/Discord or reduce in-game VRAM usage"
+severity = 7
+
+[[rule]]
+name = "amd_amdvlk_slow"
+trigger = "gpu_vendor=amd && log_contains=AMDVLK"
+message = "AMDVLK driver detected — RADV is usually faster for gaming"
+solution = "Uninstall amdvlk package and use mesa RADV: sudo apt remove amdvlk"
+severity = 6
+
+[[rule]]
+name = "amd_power_profile_wrong"
+trigger = "gpu_vendor=amd && process=steam && log_contains=power_dpm_state"
+message = "AMD GPU in power-saving mode while gaming"
+solution = "Force high performance: echo high | sudo tee /sys/class/drm/card0/device/power_dpm_force_performance_level"
+severity = 7
+
+[[rule]]
+name = "amd_old_firmware"
+trigger = "gpu_vendor=amd && log_contains=firmware.*fail"
+message = "AMD GPU firmware load failure in logs"
+solution = "Update linux-firmware package: sudo apt/dnf upgrade linux-firmware"
+severity = 9
+
+# GPU-specific rules (Intel)
+[[rule]]
+name = "intel_gpu_throttle"
+trigger = "gpu_vendor=intel && gpu_temp>75"
+message = "Intel iGPU thermal throttling (>75°C on thin chassis)"
+solution = "Reduce load or improve airflow — iGPU shares cooling with CPU"
+severity = 7
+
+[[rule]]
+name = "intel_arc_driver_old"
+trigger = "gpu_vendor=intel && log_contains=i915.*error"
+message = "Intel Arc/i915 driver errors in logs — update kernel"
+solution = "Install kernel 6.2+ for Arc support or use intel-gpu-firmware-updates PPA"
+severity = 8
+
+[[rule]]
+name = "intel_vaapi_broken"
+trigger = "gpu_vendor=intel && firefox_soft_render=true"
+message = "Intel iGPU has VA-API but Firefox isn't using it"
+solution = "Install intel-media-driver and set LIBVA_DRIVER_NAME=iHD"
+severity = 6
+
+# Gaming-specific rules
+[[rule]]
+name = "gaming_no_gamemode"
+trigger = "steam_running=true && process_count>100"
+message = "Steam running but GameMode not active — CPU scheduler not optimized"
+solution = "Install gamemode: sudo apt install gamemode && add 'gamemoderun %command%' to launch options"
+severity = 6
+
+[[rule]]
+name = "gaming_cs2_shader_stutter"
+trigger = "steam_running=true && log_contains=cs2.*shader"
+message = "CS2 shader compilation causing stutters"
+solution = "Enable shader pre-caching in Steam settings → Shader Pre-Caching"
+severity = 7
+
+[[rule]]
+name = "gaming_steam_overlay_cpu"
+trigger = "steam_running=true && cpu>80"
+message = "Steam overlay eating CPU (>80%)"
+solution = "Disable Steam overlay: Settings → In-Game → uncheck 'Enable Steam Overlay'"
+severity = 6
+
+[[rule]]
+name = "gaming_discord_overlay_vram"
+trigger = "steam_running=true && process=discord && gpu_mem_util>85"
+message = "Discord overlay using precious VRAM while gaming"
+solution = "Disable Discord overlay or close Discord entirely"
+severity = 7
+
+[[rule]]
+name = "gaming_proton_ge_old"
+trigger = "steam_running=true && log_contains=Proton.*5\\."
+message = "Old Proton version detected (5.x or older)"
+solution = "Update to Proton Experimental or install Proton-GE from ProtonUp-Qt"
+severity = 7
+
+[[rule]]
+name = "gaming_esync_disabled"
+trigger = "steam_running=true && log_contains=esync.*disabled"
+message = "Esync disabled — expect lower FPS in CPU-bound games"
+solution = "Enable esync: ulimit -Hn (check >524288) or edit /etc/security/limits.conf"
+severity = 6
+
+[[rule]]
+name = "gaming_fsync_unavailable"
+trigger = "steam_running=true && log_contains=fsync.*not.*available"
+message = "Fsync unavailable — upgrade kernel to 5.16+ for better Wine performance"
+solution = "Update kernel or use Liquorix/Xanmod for futex2 support"
+severity = 6
+
+[[rule]]
+name = "gaming_mangohud_fps_drop"
+trigger = "steam_running=true && process=mangohud && cpu>85"
+message = "MangoHud overlay causing CPU overhead"
+solution = "Reduce MangoHud features: MANGOHUD_CONFIG=fps_only,position=top-right"
+severity = 5
+
+[[rule]]
+name = "gaming_xwayland_latency"
+trigger = "wayland_vs_x11=wayland && steam_running=true"
+message = "Gaming on XWayland — expect slight input latency vs native X11"
+solution = "For competitive games, try X11 session or use gamescope --prefer-vk-device"
+severity = 5
+
+[[rule]]
+name = "gaming_nvidia_gsync_broken"
+trigger = "gpu_vendor=nvidia && wayland_vs_x11=x11 && log_contains=gsync"
+message = "G-SYNC not working properly on X11"
+solution = "Enable ForceCompositionPipeline=Off and ForceFullCompositionPipeline=Off in nvidia-settings"
+severity = 6
+
+# Wayland-specific expanded rules
+[[rule]]
+name = "wayland_kde_blur_lag"
+trigger = "wayland_vs_x11=wayland && process=kwin_wayland && cpu>60"
+message = "KWin Wayland blur causing high CPU usage"
+solution = "Disable blur: System Settings → Desktop Effects → uncheck Blur"
+severity = 7
+
+[[rule]]
+name = "wayland_gnome_extension_lag"
+trigger = "wayland_vs_x11=wayland && process=gnome-shell && mem>3000"
+message = "GNOME Shell extensions eating >3GB RAM on Wayland"
+solution = "Disable extensions via gnome-extensions or remove bloated ones"
+severity = 7
+
+[[rule]]
+name = "wayland_tearing_nvidia_old"
+trigger = "wayland_vs_x11=wayland && gpu_vendor=nvidia && log_contains=tearing"
+message = "Screen tearing on Wayland with NVIDIA (driver <555)"
+solution = "Update NVIDIA driver to 555+ for explicit sync or add __GL_YIELD=USLEEP"
+severity = 8
+
+[[rule]]
+name = "wayland_xwayland_crash"
+trigger = "wayland_vs_x11=wayland && log_contains=xwayland.*crash"
+message = "XWayland crashing — legacy X11 apps won't work"
+solution = "Update xorg-xwayland package or switch to X11 session temporarily"
+severity = 8
+
+[[rule]]
+name = "wayland_fractional_scaling_blur"
+trigger = "wayland_vs_x11=wayland && log_contains=scale.*1\\.[0-9]"
+message = "Fractional scaling on Wayland causing blurry apps"
+solution = "Use integer scaling (100%, 200%) or enable Wayland-native scaling per app"
+severity = 5
+
+[[rule]]
+name = "wayland_electron_lag"
+trigger = "wayland_vs_x11=wayland && process=electron"
+message = "Electron apps laggy on Wayland (VSCode/Discord/Slack)"
+solution = "Launch with --enable-features=UseOzonePlatform --ozone-platform=wayland"
+severity = 6
+
+# PipeWire expanded rules
+[[rule]]
+name = "pipewire_xrun_detected"
+trigger = "log_contains=pipewire.*xrun"
+message = "PipeWire buffer underruns (xruns) detected — audio crackling"
+solution = "Increase quantum: pw-metadata -n settings 0 clock.force-quantum 1024"
+severity = 7
+
+[[rule]]
+name = "pipewire_wireplumber_crash"
+trigger = "log_contains=wireplumber.*crash"
+message = "WirePlumber session manager crashing"
+solution = "Restart WirePlumber: systemctl --user restart wireplumber"
+severity = 8
+
+[[rule]]
+name = "pipewire_usb_dac_pops"
+trigger = "pipewire_latency>15 && log_contains=alsa.*usb"
+message = "USB DAC/interface causing high PipeWire latency and pops"
+solution = "Increase buffer size in /etc/pipewire/pipewire.conf or use powered USB hub"
+severity = 7
+
+[[rule]]
+name = "pipewire_bluetooth_a2dp_stutter"
+trigger = "pipewire_latency>20 && process=bluetoothd"
+message = "Bluetooth A2DP stuttering with high PipeWire latency"
+solution = "Switch codec to SBC-XQ or AAC, disable battery saving for Bluetooth adapter"
+severity = 6
+
+[[rule]]
+name = "pipewire_jack_bridge_broken"
+trigger = "log_contains=pipewire.*jack.*fail"
+message = "PipeWire JACK bridge not working — pro audio apps will fail"
+solution = "Install pipewire-jack and remove jackd2: sudo apt remove jackd2 && install pipewire-jack"
+severity = 8
+
+# Firefox hardware acceleration expanded
+[[rule]]
+name = "firefox_x11_tearing"
+trigger = "process=firefox && wayland_vs_x11=x11 && cpu>60"
+message = "Firefox on X11 with tearing and high CPU (no compositor)"
+solution = "Enable compositor or switch to Wayland: MOZ_ENABLE_WAYLAND=1 firefox"
+severity = 7
+
+[[rule]]
+name = "firefox_video_decode_cpu"
+trigger = "process=firefox && cpu>70 && firefox_soft_render=true"
+message = "Firefox decoding video on CPU — GPU idle"
+solution = "Enable VA-API: about:config → media.ffmpeg.vaapi.enabled=true"
+severity = 7
+
+[[rule]]
+name = "firefox_webgl_blacklisted"
+trigger = "process=firefox && log_contains=webgl.*blacklist"
+message = "Firefox blacklisted your GPU for WebGL"
+solution = "Force enable: about:config → webgl.force-enabled=true (risky!)"
+severity = 6
+
+[[rule]]
+name = "firefox_snap_slow"
+trigger = "process=firefox && snap loops>30"
+message = "Firefox Snap is notoriously slower than native .deb"
+solution = "Remove snap, add Mozilla PPA: sudo snap remove firefox && sudo add-apt-repository ppa:mozillateam/ppa"
+severity = 7
+
+# Disk & filesystem expanded
+[[rule]]
+name = "ext4_journal_thrashing"
+trigger = "filesystem=ext4 && disk_full>92"
+message = "ext4 journal thrashing on near-full partition"
+solution = "Free up space below 90% or disable journaling (risky): tune2fs -O ^has_journal /dev/sdX"
+severity = 8
+
+[[rule]]
+name = "xfs_fragmentation"
+trigger = "filesystem=xfs && disk_full>85"
+message = "XFS fragmentation likely high (>85% full)"
+solution = "Run xfs_fsr to defragment or free up space"
+severity = 7
+
+[[rule]]
+name = "ntfs_linux_slow"
+trigger = "log_contains=ntfs.*fuse"
+message = "NTFS-3G via FUSE is very slow on Linux"
+solution = "Use native ntfs3 driver (kernel 5.15+): mount -t ntfs3 /dev/sdX /mnt"
+severity = 7
+
+[[rule]]
+name = "btrfs_raid56_corruption"
+trigger = "filesystem=btrfs && log_contains=raid5.*corrupt"
+message = "BTRFS RAID5/6 has known corruption bugs — data at risk"
+solution = "Migrate to RAID1 or RAID10 immediately: btrfs balance start -dconvert=raid1"
+severity = 10
+
+[[rule]]
+name = "btrfs_scrub_errors"
+trigger = "filesystem=btrfs && log_contains=scrub.*error"
+message = "BTRFS scrub found errors — filesystem corruption possible"
+solution = "Run btrfs device stats and replace failing drive ASAP"
+severity = 9

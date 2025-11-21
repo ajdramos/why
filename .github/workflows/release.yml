@@ -1,0 +1,58 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: x86_64-unknown-linux-musl
+      - name: Install musl-tools
+        run: sudo apt update && sudo apt install musl-tools
+      - name: Build static binary
+        run: |
+          cargo build --release --target x86_64-unknown-linux-musl
+          strip target/x86_64-unknown-linux-musl/release/why
+          upx --best --lzma target/x86_64-unknown-linux-musl/release/why || true  # opcional
+      - name: Generate deb
+        run: |
+          mkdir -p deb/usr/bin deb/DEBIAN
+          cp target/x86_64-unknown-linux-musl/release/why deb/usr/bin/
+          echo "Package: why\nVersion: ${{ github.ref_name }}\nArchitecture: amd64\nMaintainer: tu\nDescription: Why diagnostics" > deb/DEBIAN/control
+          dpkg-deb --build deb why_${{ github.ref_name }}_amd64.deb
+      - name: Generate rpm
+        uses: jlumbroso/rpm-build-action@v1
+        with:
+          spec: |
+            Name: why
+            Version: ${{ github.ref_name }}
+            Release: 1
+            Summary: Why diagnostics
+            License: GPL-3.0
+            %install
+            install -D -m 755 target/x86_64-unknown-linux-musl/release/why %{buildroot}/usr/bin/why
+      - name: Generate AppImage
+        uses: AppImageCrafters/appimage-builder-action@v1
+        with:
+          recipe: |
+            version: 1
+            script: |
+              mkdir -p AppDir/usr/bin
+              cp target/x86_64-unknown-linux-musl/release/why AppDir/usr/bin/
+              appimagetool AppDir why.AppImage
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: |
+            why_${{ github.ref_name }}_amd64.deb
+            why-${{ github.ref_name }}-1.x86_64.rpm
+            why.AppImage
