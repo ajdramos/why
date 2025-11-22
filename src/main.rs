@@ -41,25 +41,9 @@ const HISTORY_FILE: &str = "history.db";
 // Performance and threshold constants
 const PERFORMANCE_TARGET_MS: u128 = 200;
 const FP_PRECISION_THRESHOLD: f32 = 0.001;
-// Reserved for future refactoring (currently magic numbers inline)
-#[allow(dead_code)]
-const _CPU_HIGH_THRESHOLD: f32 = 80.0;
-#[allow(dead_code)]
-const _CPU_ELEVATED_THRESHOLD: f32 = 60.0;
-#[allow(dead_code)]
-const _RAM_CRITICAL_THRESHOLD: f32 = 90.0;
-#[allow(dead_code)]
-const _RAM_HIGH_THRESHOLD: f32 = 80.0;
-#[allow(dead_code)]
-const _DISK_CRITICAL_THRESHOLD: f32 = 95.0;
-#[allow(dead_code)]
-const _DISK_HIGH_THRESHOLD: f32 = 85.0;
-#[allow(dead_code)]
-const _GPU_CACHE_REFRESH_SECS: u64 = 5;
-#[allow(dead_code)]
-const _TUI_REFRESH_MS: u64 = 200;
-#[allow(dead_code)]
-const _TUI_HISTORY_DATAPOINTS: usize = 60;
+const BOOT_SLOW_SERVICE_WARNING: f32 = 5.0;
+const BOOT_SLOW_SERVICE_CRITICAL: f32 = 15.0;
+const RCA_EVENT_LIMIT: usize = 12;
 
 static LOG_CACHE: OnceLock<Option<String>> = OnceLock::new();
 
@@ -98,9 +82,14 @@ enum Commands {
     Hot,
     Update,
     Boot,
+    BootCritical,
     Gpu,
     Gaming,
     Slow,
+    Storage,
+    Security,
+    Rca,
+    KubeNode,
     CheckDeps,
 }
 
@@ -201,8 +190,7 @@ struct WifiNetwork {
     signal: Option<f32>,
 }
 
-#[derive(Clone, Default)]
-#[derive(serde::Serialize)]
+#[derive(Clone, Default, serde::Serialize)]
 struct GpuDetails {
     vendor: String,
     model: Option<String>,
@@ -231,7 +219,9 @@ impl GpuDetails {
     fn memory_utilization(&self) -> Option<f32> {
         match (self.memory_used_mb, self.memory_total_mb) {
             // Use 0.001 threshold to avoid floating-point precision issues
-            (Some(used), Some(total)) if total > FP_PRECISION_THRESHOLD => Some((used / total) * 100.0),
+            (Some(used), Some(total)) if total > FP_PRECISION_THRESHOLD => {
+                Some((used / total) * 100.0)
+            }
             _ => None,
         }
     }
@@ -242,7 +232,7 @@ impl GpuDetails {
 fn run_cmd_c_locale(cmd: &str, args: &[&str]) -> Option<String> {
     Command::new(cmd)
         .args(args)
-        .env("LC_ALL", "C")  // Force C locale to get . instead of , for decimals
+        .env("LC_ALL", "C") // Force C locale to get . instead of , for decimals
         .env("LANG", "C")
         .output()
         .ok()
@@ -284,8 +274,8 @@ fn main() -> Result<()> {
     let command = cli.command.unwrap_or(Commands::All);
 
     // Collect GPU for snapshot (complete system state) or GPU-relevant commands
-    let needs_gpu = cli.snapshot
-                    || matches!(command, Commands::All | Commands::Gpu | Commands::Gaming);
+    let needs_gpu =
+        cli.snapshot || matches!(command, Commands::All | Commands::Gpu | Commands::Gaming);
     let mut metrics = Metrics::gather(&sys);
     if needs_gpu {
         metrics = metrics.with_gpu();
@@ -322,9 +312,14 @@ fn main() -> Result<()> {
         Commands::Hot => why_hot(&metrics)?,
         Commands::Update => why_update()?,
         Commands::Boot => why_boot()?,
+        Commands::BootCritical => why_boot_critical()?,
         Commands::Gpu => why_gpu(&metrics)?,
         Commands::Gaming => why_gaming(&metrics)?,
         Commands::Slow => why_slow(&sys, &metrics, &findings)?,
+        Commands::Storage => why_storage(&metrics)?,
+        Commands::Security => why_security()?,
+        Commands::Rca => why_rca(&metrics)?,
+        Commands::KubeNode => why_kube_node()?,
         Commands::CheckDeps => deps::check_deps()?,
     }
 
@@ -351,10 +346,16 @@ fn main() -> Result<()> {
 
     // Performance tracking: Log execution time if WHY_BENCHMARK=1 or RUST_LOG=debug
     let elapsed = start_time.elapsed();
-    if env::var("WHY_BENCHMARK").is_ok() || env::var("RUST_LOG").unwrap_or_default().contains("debug") {
+    if env::var("WHY_BENCHMARK").is_ok()
+        || env::var("RUST_LOG").unwrap_or_default().contains("debug")
+    {
         eprintln!("⏱️  Execution time: {:.0}ms", elapsed.as_millis());
         if elapsed.as_millis() > PERFORMANCE_TARGET_MS {
-            eprintln!("⚠️  Warning: Exceeded {}ms target ({:.0}ms)", PERFORMANCE_TARGET_MS, elapsed.as_millis());
+            eprintln!(
+                "⚠️  Warning: Exceeded {}ms target ({:.0}ms)",
+                PERFORMANCE_TARGET_MS,
+                elapsed.as_millis()
+            );
         }
     }
 
@@ -379,8 +380,8 @@ fn update_rules_from_remote() -> Result<()> {
     let contents = response.text().context("Failed to read remote rules")?;
 
     // Validate TOML structure before writing
-    let parsed: RulesFile = toml::from_str(&contents)
-        .context("Remote rules file is invalid TOML")?;
+    let parsed: RulesFile =
+        toml::from_str(&contents).context("Remote rules file is invalid TOML")?;
 
     if parsed.rule.is_empty() {
         return Err(anyhow!("Remote rules file contains no rules"));
@@ -899,7 +900,7 @@ fn read_battery_drain() -> Option<f32> {
     }
     let info = Command::new("upower")
         .args(["-i", &battery])
-        .env("LC_ALL", "C")  // Force C locale for consistent number format
+        .env("LC_ALL", "C") // Force C locale for consistent number format
         .env("LANG", "C")
         .output()
         .ok()?;
@@ -924,7 +925,7 @@ fn read_battery_drain() -> Option<f32> {
 fn wifi_networks() -> Option<Vec<WifiNetwork>> {
     let output = Command::new("nmcli")
         .args(["-t", "-f", "ACTIVE,CHAN,SIGNAL", "device", "wifi", "list"])
-        .env("LC_ALL", "C")  // Force C locale for consistent number format
+        .env("LC_ALL", "C") // Force C locale for consistent number format
         .env("LANG", "C")
         .output()
         .ok()?;
@@ -1025,7 +1026,7 @@ fn detect_pipewire_latency_ms() -> Option<f32> {
 fn read_pipewire_latency(key: &str) -> Option<f32> {
     let output = Command::new("pw-metadata")
         .args(["-n", "settings", "0", key])
-        .env("LC_ALL", "C")  // Force C locale for consistent number format
+        .env("LC_ALL", "C") // Force C locale for consistent number format
         .env("LANG", "C")
         .output()
         .ok()?;
@@ -1109,18 +1110,10 @@ fn is_process_running(name: &str) -> bool {
 }
 
 fn detect_proton_failures() -> bool {
+    // user_home_dir() returns trusted path from $HOME/$USERPROFILE env vars
+    // No additional validation needed - it's always safe and absolute
     let home = match user_home_dir() {
-        Some(path) => {
-            // Validate path is absolute and canonicalize to prevent path traversal
-            if !path.is_absolute() {
-                return false;
-            }
-            // Canonicalize path to resolve any .. or symlinks securely
-            match path.canonicalize() {
-                Ok(canonical) => canonical,
-                Err(_) => return false,  // Path doesn't exist or is inaccessible
-            }
-        }
+        Some(path) => path,
         None => return false,
     };
 
@@ -1149,15 +1142,19 @@ fn detect_vulkan_loader_missing() -> bool {
 
 pub fn is_command_available(cmd: &str) -> bool {
     // Security: Validate command name to prevent injection attacks
-    // Only allow alphanumeric characters, dash, underscore, and slash (for paths)
-    if !cmd.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/') {
+    // Only allow alphanumeric characters, dash, and underscore (no paths/slashes)
+    if !cmd
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         return false;
     }
 
-    // Use direct Command execution instead of shell for safety
-    Command::new("sh")
-        .arg("-c")
-        .arg(format!("command -v {} >/dev/null 2>&1", cmd))
+    // Use 'which' directly without shell for safety
+    Command::new("which")
+        .arg(cmd)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
@@ -1227,8 +1224,14 @@ fn nvidia_gpu_info() -> Option<GpuDetails> {
 
 fn amd_gpu_info() -> Option<GpuDetails> {
     let output = Command::new("rocm-smi")
-        .args(["--showtemp", "--showuse", "--showmeminfo", "vram", "--showfan"])
-        .env("LC_ALL", "C")  // Force C locale for consistent number format
+        .args([
+            "--showtemp",
+            "--showuse",
+            "--showmeminfo",
+            "vram",
+            "--showfan",
+        ])
+        .env("LC_ALL", "C") // Force C locale for consistent number format
         .env("LANG", "C")
         .output()
         .ok()?;
@@ -1521,6 +1524,43 @@ fn print_findings_table(findings: &[Finding]) {
     }
 }
 
+#[derive(Clone, Copy)]
+enum InsightLevel {
+    Info,
+    Good,
+    Warning,
+    Critical,
+}
+
+struct InsightLine {
+    level: InsightLevel,
+    message: String,
+}
+
+type SectionResult = std::result::Result<Vec<InsightLine>, String>;
+
+fn stylize_insight(line: &InsightLine) -> colored::ColoredString {
+    match line.level {
+        InsightLevel::Info => line.message.clone().dimmed(),
+        InsightLevel::Good => line.message.clone().green(),
+        InsightLevel::Warning => line.message.clone().yellow(),
+        InsightLevel::Critical => line.message.clone().red().bold(),
+    }
+}
+
+fn print_section(title: &str, section: SectionResult) {
+    println!("\n{}", title.bold());
+    match section {
+        Ok(lines) if !lines.is_empty() => {
+            for line in lines {
+                println!("  {}", stylize_insight(&line));
+            }
+        }
+        Ok(_) => println!("  {}", t!("diag_section_no_entries").to_string().dimmed()),
+        Err(message) => println!("  {}", message.dimmed()),
+    }
+}
+
 fn truncate(text: &str, max: usize) -> String {
     let mut out = String::new();
     for (idx, ch) in text.chars().enumerate() {
@@ -1564,7 +1604,12 @@ fn show_dashboard(findings: &[Finding], metrics: &Metrics) {
         for (tool, i18n_key) in missing {
             println!("   {} — {}", tool.yellow(), t!(i18n_key).dimmed());
         }
-        println!("   {}\n", t!("missing_tools_footer").replace("{cmd}", "why check-deps").cyan());
+        println!(
+            "   {}\n",
+            t!("missing_tools_footer")
+                .replace("{cmd}", "why check-deps")
+                .cyan()
+        );
     }
 
     if findings.is_empty() {
@@ -1631,23 +1676,20 @@ fn generate_snapshot(metrics: &Metrics, findings: &[Finding]) -> Result<()> {
     let uptime_seconds = System::uptime();
 
     // Gather recent logs (last 100 lines)
-    let recent_dmesg = Command::new("dmesg")
-        .output()
-        .ok()
-        .and_then(|out| {
-            if out.status.success() {
-                Some(
-                    String::from_utf8_lossy(&out.stdout)
-                        .lines()
-                        .rev()
-                        .take(100)
-                        .map(|s| s.to_string())
-                        .collect::<Vec<_>>()
-                )
-            } else {
-                None
-            }
-        });
+    let recent_dmesg = Command::new("dmesg").output().ok().and_then(|out| {
+        if out.status.success() {
+            Some(
+                String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .rev()
+                    .take(100)
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        }
+    });
 
     let recent_journal = Command::new("journalctl")
         .args(["-n", "100", "--no-pager"])
@@ -1659,7 +1701,7 @@ fn generate_snapshot(metrics: &Metrics, findings: &[Finding]) -> Result<()> {
                     String::from_utf8_lossy(&out.stdout)
                         .lines()
                         .map(|s| s.to_string())
-                        .collect::<Vec<_>>()
+                        .collect::<Vec<_>>(),
                 )
             } else {
                 None
@@ -1711,22 +1753,27 @@ fn generate_snapshot(metrics: &Metrics, findings: &[Finding]) -> Result<()> {
     };
 
     // Generate JSON
-    let json = serde_json::to_string_pretty(&snapshot)
-        .context("Failed to serialize snapshot")?;
+    let json = serde_json::to_string_pretty(&snapshot).context("Failed to serialize snapshot")?;
 
     let filename = format!("why-snapshot-{}.json", timestamp.replace(':', "-"));
-    fs::write(&filename, &json)
-        .with_context(|| format!("Failed to write {}", filename))?;
+    fs::write(&filename, &json).with_context(|| format!("Failed to write {}", filename))?;
 
     println!("{}", t!("snapshot_generated").green().bold());
     println!();
     println!("{}  {}", t!("snapshot_json_label").bold(), filename.cyan());
-    println!("{}     {}", t!("snapshot_size_label").dimmed(), format!("{} bytes", json.len()).dimmed());
+    println!(
+        "{}     {}",
+        t!("snapshot_size_label").dimmed(),
+        format!("{} bytes", json.len()).dimmed()
+    );
     println!();
     println!("{}", t!("snapshot_includes").bold());
     println!("  • {}", t!("snapshot_metadata"));
     println!("  • {}", t!("snapshot_metrics"));
-    println!("  • {}", t!("snapshot_findings_count").replace("{count}", &findings.len().to_string()));
+    println!(
+        "  • {}",
+        t!("snapshot_findings_count").replace("{count}", &findings.len().to_string())
+    );
     if has_dmesg {
         println!("  • {}", t!("snapshot_dmesg"));
     }
@@ -1744,7 +1791,10 @@ fn why_slow(sys: &System, metrics: &Metrics, findings: &[Finding]) -> Result<()>
     println!();
 
     // System vitals
-    println!("{}", t!("slow_system_performance").to_string().bold().cyan());
+    println!(
+        "{}",
+        t!("slow_system_performance").to_string().bold().cyan()
+    );
     println!("{} {:.1}%", t!("slow_cpu_label"), metrics.cpu_usage);
     if metrics.cpu_usage > 80.0 {
         println!("  {} {}", "⚠️".yellow(), t!("slow_cpu_very_high"));
@@ -1768,7 +1818,11 @@ fn why_slow(sys: &System, metrics: &Metrics, findings: &[Finding]) -> Result<()>
         println!("  {} {}", "✓".green(), t!("slow_ram_acceptable"));
     }
 
-    println!("{} {:.1}% full", t!("slow_disk_label"), metrics.disk_full_percent);
+    println!(
+        "{} {:.1}% full",
+        t!("slow_disk_label"),
+        metrics.disk_full_percent
+    );
     if metrics.disk_full_percent > 90.0 {
         println!("  {} {}", "🔥".red(), t!("slow_disk_critical"));
     } else if metrics.disk_full_percent > 80.0 {
@@ -1974,6 +2028,124 @@ fn why_boot() -> Result<()> {
     Ok(())
 }
 
+fn why_boot_critical() -> Result<()> {
+    println!("{}", t!("boot_critical_header").to_string().bold());
+    if !is_command_available("systemd-analyze") {
+        println!("{}", t!("boot_unknown"));
+        return Ok(());
+    }
+
+    let blame_entries = collect_systemd_blame().unwrap_or_default();
+    let mut flagged = false;
+    let blame_header = t!("boot_critical_blame_header").to_string();
+    let blame_lines: Vec<InsightLine> = blame_entries
+        .iter()
+        .take(10)
+        .map(|entry| {
+            let level = if entry.seconds >= BOOT_SLOW_SERVICE_CRITICAL {
+                InsightLevel::Critical
+            } else if entry.seconds >= BOOT_SLOW_SERVICE_WARNING {
+                InsightLevel::Warning
+            } else {
+                InsightLevel::Info
+            };
+            if matches!(level, InsightLevel::Warning | InsightLevel::Critical) {
+                flagged = true;
+            }
+            InsightLine {
+                level,
+                message: format!("{:>8} {}", format!("{:.2}s", entry.seconds), entry.unit),
+            }
+        })
+        .collect();
+    print_section(&blame_header, Ok(blame_lines));
+    if !flagged {
+        let ok = t!("boot_critical_no_slow_services")
+            .replace("{threshold}", &format!("{:.1}", BOOT_SLOW_SERVICE_WARNING));
+        println!("  {}", ok.green());
+    }
+
+    let chain_header = t!("boot_critical_chain_header").to_string();
+    println!("\n{}", chain_header.bold());
+    let chain_output = Command::new("systemd-analyze")
+        .args(["critical-chain", "--no-pager"])
+        .output();
+    match chain_output {
+        Ok(out) if out.status.success() => {
+            for line in String::from_utf8_lossy(&out.stdout).lines().take(20) {
+                println!("{line}");
+            }
+        }
+        _ => println!(
+            "  {}",
+            t!("boot_critical_chain_missing").to_string().yellow()
+        ),
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct BootService {
+    unit: String,
+    seconds: f32,
+}
+
+fn collect_systemd_blame() -> Option<Vec<BootService>> {
+    let output = Command::new("systemd-analyze")
+        .args(["blame", "--no-pager"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut entries = Vec::new();
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+        if tokens.len() < 2 {
+            continue;
+        }
+        let mut seconds = 0.0;
+        let mut consumed = 0;
+        for token in &tokens {
+            if let Some(value) = parse_systemd_duration_token(token) {
+                seconds += value;
+                consumed += 1;
+            } else {
+                break;
+            }
+        }
+        if consumed == 0 || consumed >= tokens.len() {
+            continue;
+        }
+        let unit = tokens[consumed..].join(" ");
+        entries.push(BootService { unit, seconds });
+    }
+    entries.sort_by(|a, b| b.seconds.partial_cmp(&a.seconds).unwrap_or(Ordering::Equal));
+    Some(entries)
+}
+
+fn parse_systemd_duration_token(token: &str) -> Option<f32> {
+    if let Some(value) = token.strip_suffix("ms") {
+        return value.trim().parse::<f32>().ok().map(|ms| ms / 1_000.0);
+    }
+    if let Some(value) = token.strip_suffix("us") {
+        return value.trim().parse::<f32>().ok().map(|us| us / 1_000_000.0);
+    }
+    if let Some(value) = token.strip_suffix("s") {
+        return value.trim().parse::<f32>().ok();
+    }
+    if let Some(value) = token.strip_suffix("min") {
+        return value.trim().parse::<f32>().ok().map(|min| min * 60.0);
+    }
+    None
+}
+
 fn why_gpu(metrics: &Metrics) -> Result<()> {
     println!("{}", t!("gpu_header").to_string().bold());
     if let Some(gpu) = metrics.gpu.as_ref() {
@@ -2097,7 +2269,10 @@ fn why_gaming(metrics: &Metrics) -> Result<()> {
                 }
                 // Check for nvidia-settings
                 if !is_command_available("nvidia-settings") {
-                    println!("{}", t!("gaming_nvidia_settings_missing").to_string().yellow());
+                    println!(
+                        "{}",
+                        t!("gaming_nvidia_settings_missing").to_string().yellow()
+                    );
                 }
             }
             "amd" => {
@@ -2163,6 +2338,888 @@ fn why_gaming(metrics: &Metrics) -> Result<()> {
     Ok(())
 }
 
+fn why_storage(metrics: &Metrics) -> Result<()> {
+    println!("{}", t!("storage_header").to_string().bold());
+    let fs_label = metrics
+        .filesystem
+        .clone()
+        .unwrap_or_else(|| "unknown".into());
+    let overview = t!("storage_overview")
+        .replace("{disk}", &format!("{:.1}", metrics.disk_full_percent))
+        .replace("{fs}", &fs_label);
+    println!("{overview}");
+
+    let smart_header = t!("storage_smart_header").to_string();
+    print_section(&smart_header, gather_smart_health());
+
+    let raid_header = t!("storage_md_header").to_string();
+    print_section(&raid_header, gather_mdraid_health());
+
+    let btrfs_header = t!("storage_btrfs_header").to_string();
+    print_section(&btrfs_header, gather_btrfs_health());
+
+    let zfs_header = t!("storage_zfs_header").to_string();
+    print_section(&zfs_header, gather_zfs_health());
+
+    Ok(())
+}
+
+fn gather_smart_health() -> SectionResult {
+    if !is_command_available("smartctl") {
+        return Err(t!("storage_smart_missing").to_string());
+    }
+
+    let scan = Command::new("smartctl")
+        .args(["--scan-open"])
+        .output()
+        .map_err(|_| t!("storage_smart_missing").to_string())?;
+    if !scan.status.success() {
+        return Err(String::from_utf8_lossy(&scan.stderr).trim().to_string());
+    }
+
+    let mut devices = Vec::new();
+    for line in String::from_utf8_lossy(&scan.stdout).lines() {
+        let device = line.split_whitespace().next().unwrap_or_default().trim();
+        if device.is_empty() || device.starts_with('#') {
+            continue;
+        }
+        devices.push(device.to_string());
+    }
+    devices.sort();
+    devices.dedup();
+    if devices.is_empty() {
+        return Err(t!("storage_smart_no_devices").to_string());
+    }
+
+    let mut lines = Vec::new();
+    for device in devices.into_iter().take(8) {
+        let output = Command::new("smartctl").args(["-H", &device]).output();
+        match output {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout).to_ascii_lowercase();
+                let mut level = InsightLevel::Info;
+                let mut status = "UNKNOWN".to_string();
+                if text.contains("passed") {
+                    level = InsightLevel::Good;
+                    status = "PASSED".into();
+                }
+                if text.contains("failed") {
+                    level = InsightLevel::Critical;
+                    status = "FAILED".into();
+                } else if text.contains("prefail") {
+                    level = InsightLevel::Warning;
+                    status = "PRE-FAIL".into();
+                }
+                lines.push(InsightLine {
+                    level,
+                    message: format!("{device}: SMART {status}"),
+                });
+            }
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr);
+                let fallback = if err.trim().is_empty() {
+                    "smartctl -H requires root privileges".into()
+                } else {
+                    err.trim().to_string()
+                };
+                lines.push(InsightLine {
+                    level: InsightLevel::Warning,
+                    message: format!("{device}: {fallback}"),
+                });
+            }
+            Err(_) => lines.push(InsightLine {
+                level: InsightLevel::Warning,
+                message: format!("{device}: smartctl invocation failed"),
+            }),
+        }
+    }
+    Ok(lines)
+}
+
+fn gather_mdraid_health() -> SectionResult {
+    let text =
+        fs::read_to_string("/proc/mdstat").map_err(|_| t!("storage_mdstat_missing").to_string())?;
+    let mut lines = Vec::new();
+    for block in text.split("\n\n") {
+        let mut parts = block.lines();
+        let header = match parts.next() {
+            Some(line) if line.starts_with("md") => line,
+            _ => continue,
+        };
+        let name = header.split_whitespace().next().unwrap_or("md?");
+        let normalized = block.to_ascii_lowercase();
+        let missing =
+            normalized.contains("_]") || normalized.contains("[u_") || normalized.contains("[__");
+        let degraded = normalized.contains("degraded") || missing;
+        let recovering = normalized.contains("recovery") || normalized.contains("resync");
+        let level = if degraded {
+            InsightLevel::Critical
+        } else if recovering {
+            InsightLevel::Warning
+        } else {
+            InsightLevel::Good
+        };
+        let detail = if degraded {
+            "degraded"
+        } else if recovering {
+            "resync in progress"
+        } else {
+            "healthy"
+        };
+        lines.push(InsightLine {
+            level,
+            message: format!("{name}: {detail}"),
+        });
+    }
+    if lines.is_empty() {
+        Err(t!("storage_mdstat_clean").to_string())
+    } else {
+        Ok(lines)
+    }
+}
+
+fn gather_btrfs_health() -> SectionResult {
+    if !is_command_available("btrfs") {
+        return Err(t!("storage_btrfs_missing").to_string());
+    }
+    let mounts = btrfs_mount_points();
+    if mounts.is_empty() {
+        return Err(t!("storage_btrfs_not_found").to_string());
+    }
+
+    let mut lines = Vec::new();
+    for mount in mounts.into_iter().take(4) {
+        let output = Command::new("btrfs")
+            .args(["device", "stats", &mount])
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                let mut errors = Vec::new();
+                for line in String::from_utf8_lossy(&out.stdout).lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if let Some(value_token) = trimmed.split_whitespace().last() {
+                        if let Ok(value) = value_token.parse::<u64>() {
+                            if value > 0 {
+                                errors.push(trimmed.to_string());
+                            }
+                        }
+                    }
+                }
+                if errors.is_empty() {
+                    lines.push(InsightLine {
+                        level: InsightLevel::Good,
+                        message: format!("{mount}: no device errors reported"),
+                    });
+                } else {
+                    for err in errors {
+                        lines.push(InsightLine {
+                            level: InsightLevel::Warning,
+                            message: format!("{mount}: {err}"),
+                        });
+                    }
+                }
+            }
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr);
+                lines.push(InsightLine {
+                    level: InsightLevel::Warning,
+                    message: format!("{mount}: {}", err.trim()),
+                });
+            }
+            Err(_) => lines.push(InsightLine {
+                level: InsightLevel::Warning,
+                message: format!("{mount}: btrfs device stats failed"),
+            }),
+        }
+    }
+    Ok(lines)
+}
+
+fn gather_zfs_health() -> SectionResult {
+    if !is_command_available("zpool") {
+        return Err(t!("storage_zfs_missing").to_string());
+    }
+    let output = Command::new("zpool").arg("status").output();
+    let out = match output {
+        Ok(out) if out.status.success() => out,
+        Ok(out) => return Err(String::from_utf8_lossy(&out.stderr).trim().to_string()),
+        Err(_) => return Err(t!("storage_zfs_missing").to_string()),
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    if text.to_ascii_lowercase().contains("no pools available") {
+        return Err(t!("storage_zfs_clean").to_string());
+    }
+    #[derive(Default)]
+    struct Pool {
+        name: String,
+        state: Option<String>,
+        errors: Option<String>,
+    }
+    let mut pools = Vec::new();
+    let mut current: Option<Pool> = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(name) = trimmed.strip_prefix("pool:") {
+            if let Some(pool) = current.take() {
+                pools.push(pool);
+            }
+            current = Some(Pool {
+                name: name.trim().to_string(),
+                ..Default::default()
+            });
+        } else if let Some(state) = trimmed.strip_prefix("state:") {
+            if let Some(pool) = current.as_mut() {
+                pool.state = Some(state.trim().to_string());
+            }
+        } else if trimmed.starts_with("errors:") {
+            if let Some(pool) = current.as_mut() {
+                pool.errors = Some(trimmed["errors:".len()..].trim().to_string());
+            }
+        }
+    }
+    if let Some(pool) = current {
+        pools.push(pool);
+    }
+    if pools.is_empty() {
+        return Err(t!("storage_zfs_clean").to_string());
+    }
+
+    let mut lines = Vec::new();
+    for pool in pools {
+        let state = pool.state.unwrap_or_else(|| "unknown".into());
+        let errors = pool.errors.unwrap_or_else(|| "unknown".into());
+        let lower_state = state.to_ascii_lowercase();
+        let mut level = if lower_state.contains("degraded")
+            || lower_state.contains("fault")
+            || lower_state.contains("offline")
+            || lower_state.contains("unavail")
+        {
+            InsightLevel::Critical
+        } else {
+            InsightLevel::Good
+        };
+        if !errors.to_ascii_lowercase().contains("no known data errors")
+            && !errors.eq_ignore_ascii_case("none")
+            && !errors.eq_ignore_ascii_case("unknown")
+        {
+            if matches!(level, InsightLevel::Good) {
+                level = InsightLevel::Warning;
+            }
+        }
+        lines.push(InsightLine {
+            level,
+            message: format!("{}: state={} | errors={}", pool.name, state, errors),
+        });
+    }
+    Ok(lines)
+}
+
+fn btrfs_mount_points() -> Vec<String> {
+    let mut mounts = Vec::new();
+    if let Ok(data) = fs::read_to_string("/proc/mounts") {
+        for line in data.lines() {
+            let mut parts = line.split_whitespace();
+            let _device = match parts.next() {
+                Some(value) => value,
+                None => continue,
+            };
+            let mount_point = match parts.next() {
+                Some(value) => value,
+                None => continue,
+            };
+            let fs_type = match parts.next() {
+                Some(value) => value,
+                None => continue,
+            };
+            if fs_type == "btrfs" {
+                mounts.push(mount_point.to_string());
+            }
+        }
+    }
+    mounts
+}
+
+fn why_security() -> Result<()> {
+    println!("{}", t!("security_header").to_string().bold());
+
+    let mac_header = t!("security_controls_header").to_string();
+    let controls = vec![selinux_status_line(), apparmor_status_line()];
+    print_section(&mac_header, Ok(controls));
+
+    let firewall_header = t!("security_firewall_header").to_string();
+    print_section(&firewall_header, gather_firewall_lines());
+
+    let ports_header = t!("security_open_ports_header").to_string();
+    print_section(&ports_header, gather_open_ports(8));
+
+    Ok(())
+}
+
+fn selinux_status_line() -> InsightLine {
+    if !is_command_available("getenforce") {
+        return InsightLine {
+            level: InsightLevel::Info,
+            message: t!("security_selinux_missing").to_string(),
+        };
+    }
+    let output = Command::new("getenforce").output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let state = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let level = match state.to_ascii_lowercase().as_str() {
+                "enforcing" => InsightLevel::Good,
+                "permissive" => InsightLevel::Warning,
+                _ => InsightLevel::Warning,
+            };
+            InsightLine {
+                level,
+                message: format!("SELinux: {state}"),
+            }
+        }
+        Ok(out) => InsightLine {
+            level: InsightLevel::Warning,
+            message: format!("SELinux: {}", String::from_utf8_lossy(&out.stderr).trim()),
+        },
+        Err(_) => InsightLine {
+            level: InsightLevel::Warning,
+            message: "SELinux: unable to query state".into(),
+        },
+    }
+}
+
+fn apparmor_status_line() -> InsightLine {
+    if !is_command_available("aa-status") {
+        return InsightLine {
+            level: InsightLevel::Info,
+            message: t!("security_apparmor_missing").to_string(),
+        };
+    }
+    let output = Command::new("aa-status").output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let enforced = text
+                .lines()
+                .find(|line| line.contains("profiles are in enforce mode"))
+                .unwrap_or_default()
+                .split_whitespace()
+                .next()
+                .unwrap_or("0")
+                .to_string();
+            InsightLine {
+                level: InsightLevel::Good,
+                message: format!("AppArmor: {enforced} profiles enforcing"),
+            }
+        }
+        Ok(out) => InsightLine {
+            level: InsightLevel::Warning,
+            message: format!("AppArmor: {}", String::from_utf8_lossy(&out.stderr).trim()),
+        },
+        Err(_) => InsightLine {
+            level: InsightLevel::Warning,
+            message: "AppArmor: unable to query module".into(),
+        },
+    }
+}
+
+fn gather_firewall_lines() -> SectionResult {
+    let mut lines = Vec::new();
+    if let Some(line) = query_systemd_unit("firewalld", "firewalld") {
+        lines.push(line);
+    }
+    if is_command_available("ufw") {
+        let output = Command::new("ufw").arg("status").output();
+        if let Ok(out) = output {
+            let text = String::from_utf8_lossy(&out.stdout).to_ascii_lowercase();
+            let active = text.contains("status: active");
+            lines.push(InsightLine {
+                level: if active {
+                    InsightLevel::Good
+                } else {
+                    InsightLevel::Warning
+                },
+                message: format!("UFW: {}", if active { "active" } else { "inactive" }),
+            });
+        }
+    }
+    if is_command_available("nft") {
+        if let Ok(out) = Command::new("nft").args(["list", "ruleset"]).output() {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let has_rules = text.lines().any(|line| line.contains("table "));
+                lines.push(InsightLine {
+                    level: if has_rules {
+                        InsightLevel::Good
+                    } else {
+                        InsightLevel::Warning
+                    },
+                    message: format!(
+                        "nftables: {}",
+                        if has_rules {
+                            "rules present"
+                        } else {
+                            "no rules"
+                        }
+                    ),
+                });
+            }
+        }
+    }
+    if lines.is_empty() {
+        Err(t!("security_firewall_missing").to_string())
+    } else {
+        Ok(lines)
+    }
+}
+
+fn gather_open_ports(limit: usize) -> SectionResult {
+    if let Some(entries) = open_ports_from_ss(limit) {
+        if entries.is_empty() {
+            return Ok(vec![InsightLine {
+                level: InsightLevel::Good,
+                message: t!("security_open_ports_none").to_string(),
+            }]);
+        }
+        return Ok(entries
+            .into_iter()
+            .map(|entry| InsightLine {
+                level: InsightLevel::Info,
+                message: entry,
+            })
+            .collect());
+    }
+    if let Some(entries) = open_ports_from_netstat(limit) {
+        if entries.is_empty() {
+            return Ok(vec![InsightLine {
+                level: InsightLevel::Good,
+                message: t!("security_open_ports_none").to_string(),
+            }]);
+        }
+        return Ok(entries
+            .into_iter()
+            .map(|entry| InsightLine {
+                level: InsightLevel::Info,
+                message: entry,
+            })
+            .collect());
+    }
+    Err(t!("security_ports_tool_missing").to_string())
+}
+
+fn open_ports_from_ss(limit: usize) -> Option<Vec<String>> {
+    if !is_command_available("ss") {
+        return None;
+    }
+    let output = Command::new("ss").args(["-tulpn"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut entries = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines().skip(1) {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 6 {
+            continue;
+        }
+        let proto = parts[0];
+        let local = parts[4];
+        let process = parts.get(6).copied().unwrap_or("-");
+        entries.push(format!("{proto:<4} {local:<30} {process}"));
+        if entries.len() >= limit {
+            break;
+        }
+    }
+    Some(entries)
+}
+
+fn open_ports_from_netstat(limit: usize) -> Option<Vec<String>> {
+    if !is_command_available("netstat") {
+        return None;
+    }
+    let output = Command::new("netstat").args(["-tulpn"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut entries = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if line.starts_with("Proto") || line.trim().is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 7 {
+            continue;
+        }
+        let proto = parts[0];
+        let local = parts[3];
+        let process = parts[6];
+        entries.push(format!("{proto:<4} {local:<30} {process}"));
+        if entries.len() >= limit {
+            break;
+        }
+    }
+    Some(entries)
+}
+
+fn query_systemd_unit(unit: &str, label: &str) -> Option<InsightLine> {
+    if !is_command_available("systemctl") {
+        return None;
+    }
+    let output = Command::new("systemctl")
+        .args(["is-active", unit])
+        .output()
+        .ok()?;
+    let text = if output.stdout.is_empty() {
+        String::from_utf8_lossy(&output.stderr).trim().to_string()
+    } else {
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+    let active = output.status.success() && text == "active";
+    let level = if active {
+        InsightLevel::Good
+    } else if text == "inactive" || text == "failed" {
+        InsightLevel::Warning
+    } else {
+        InsightLevel::Info
+    };
+    Some(InsightLine {
+        level,
+        message: format!("{label}: {text}"),
+    })
+}
+
+fn why_rca(metrics: &Metrics) -> Result<()> {
+    println!("{}", t!("rca_header").to_string().bold());
+    let uptime = Duration::from_secs(System::uptime());
+    let summary = t!("rca_summary")
+        .replace("{uptime}", &human_duration(uptime))
+        .replace("{cpu}", &format!("{:.1}", metrics.cpu_usage))
+        .replace("{ram}", &format!("{:.1}", metrics.mem_usage))
+        .replace("{disk}", &format!("{:.1}", metrics.disk_full_percent));
+    println!("{summary}");
+    if let Some(last_boot) = last_boot_string() {
+        println!("{} {last_boot}", t!("rca_last_boot"));
+    }
+
+    println!("\n{}", t!("rca_timeline_header").to_string().bold());
+    if let Some(logs) = recent_logs() {
+        let events = extract_rca_events(&logs);
+        if events.is_empty() {
+            println!("  {}", t!("rca_no_events").to_string().green());
+        } else {
+            for event in events {
+                println!("  {}", stylize_insight(&event));
+            }
+        }
+    } else {
+        println!("  {}", t!("rca_logs_missing").to_string().yellow());
+    }
+    Ok(())
+}
+
+struct RcaPattern {
+    label: &'static str,
+    keywords: &'static [&'static str],
+    level: InsightLevel,
+}
+
+const RCA_PATTERNS: &[RcaPattern] = &[
+    RcaPattern {
+        label: "OOM killer invoked",
+        keywords: &["oom-killer", "out of memory"],
+        level: InsightLevel::Critical,
+    },
+    RcaPattern {
+        label: "Kernel panic / BUG",
+        keywords: &["kernel panic", "fatal exception", "call trace", "bug:"],
+        level: InsightLevel::Critical,
+    },
+    RcaPattern {
+        label: "Hardware machine check",
+        keywords: &["machine check", "mce:"],
+        level: InsightLevel::Critical,
+    },
+    RcaPattern {
+        label: "Thermal throttling",
+        keywords: &["thermal throttling", "cpu thermal", "throttled"],
+        level: InsightLevel::Warning,
+    },
+    RcaPattern {
+        label: "GPU reset or fault",
+        keywords: &["gpu hang", "gpu reset", "amdgpu", "i915 error"],
+        level: InsightLevel::Warning,
+    },
+    RcaPattern {
+        label: "Disk I/O errors",
+        keywords: &["i/o error", "blk_update_request", "end_request"],
+        level: InsightLevel::Critical,
+    },
+    RcaPattern {
+        label: "Btrfs checksum errors",
+        keywords: &["btrfs", "checksum error"],
+        level: InsightLevel::Warning,
+    },
+    RcaPattern {
+        label: "Watchdog reset",
+        keywords: &["watchdog", "hard lockup", "soft lockup"],
+        level: InsightLevel::Critical,
+    },
+];
+
+fn extract_rca_events(logs: &str) -> Vec<InsightLine> {
+    let mut events = Vec::new();
+    for line in logs.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        for pattern in RCA_PATTERNS {
+            if pattern.keywords.iter().any(|needle| lower.contains(needle)) {
+                events.push(InsightLine {
+                    level: pattern.level,
+                    message: format!("{} — {}", pattern.label, truncate(trimmed, 110)),
+                });
+                break;
+            }
+        }
+        if events.len() >= RCA_EVENT_LIMIT {
+            break;
+        }
+    }
+    events
+}
+
+fn last_boot_string() -> Option<String> {
+    let output = Command::new("who").arg("-b").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .next()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+}
+
+fn human_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    let days = seconds / 86_400;
+    let hours = (seconds % 86_400) / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    let mut parts = Vec::new();
+    if days > 0 {
+        parts.push(format!("{days}d"));
+    }
+    if hours > 0 {
+        parts.push(format!("{hours}h"));
+    }
+    if minutes > 0 {
+        parts.push(format!("{minutes}m"));
+    }
+    if parts.is_empty() {
+        parts.push(format!("{}s", seconds));
+    }
+    parts.join(" ")
+}
+
+fn why_kube_node() -> Result<()> {
+    println!("{}", t!("kube_node_header").to_string().bold());
+
+    let kubelet_header = t!("kube_node_kubelet_header").to_string();
+    print_section(&kubelet_header, Ok(vec![kubelet_status_line()]));
+
+    let runtime_header = t!("kube_node_runtime_header").to_string();
+    print_section(&runtime_header, gather_runtime_lines());
+
+    let pressure_header = t!("kube_node_pressure_header").to_string();
+    print_section(&pressure_header, gather_pressure_lines());
+
+    let logs_header = t!("kube_node_kubelet_logs").to_string();
+    print_section(&logs_header, gather_kubelet_warnings());
+
+    let pods_header = t!("kube_node_pod_header").to_string();
+    print_section(&pods_header, gather_problem_pods(8));
+
+    Ok(())
+}
+
+fn kubelet_status_line() -> InsightLine {
+    query_systemd_unit("kubelet", "kubelet").unwrap_or(InsightLine {
+        level: InsightLevel::Info,
+        message: t!("kube_node_kubelet_missing").to_string(),
+    })
+}
+
+fn gather_runtime_lines() -> SectionResult {
+    let mut lines = Vec::new();
+    for (unit, label) in [
+        ("containerd", "containerd"),
+        ("crio", "crio"),
+        ("docker", "dockerd"),
+    ] {
+        if let Some(line) = query_systemd_unit(unit, label) {
+            lines.push(line);
+        }
+    }
+    if lines.is_empty() {
+        Err(t!("kube_node_runtime_missing").to_string())
+    } else {
+        Ok(lines)
+    }
+}
+
+fn gather_pressure_lines() -> SectionResult {
+    let mut lines = Vec::new();
+    for resource in ["cpu", "memory", "io"] {
+        if let Some((some, full)) = read_pressure(resource) {
+            let mut message = format!(
+                "{}: avg10={:.2}% avg60={:.2}% avg300={:.2}%",
+                resource.to_uppercase(),
+                some.avg10,
+                some.avg60,
+                some.avg300
+            );
+            if let Some(full_stats) = full {
+                message.push_str(&format!(" | full avg10={:.2}%", full_stats.avg10));
+            }
+            let critical = some.avg10 > 0.80
+                || full
+                    .as_ref()
+                    .map(|entry| entry.avg10 > 0.40)
+                    .unwrap_or(false);
+            let warning = some.avg10 > 0.30 || some.avg60 > 0.45;
+            lines.push(InsightLine {
+                level: if critical {
+                    InsightLevel::Critical
+                } else if warning {
+                    InsightLevel::Warning
+                } else {
+                    InsightLevel::Info
+                },
+                message,
+            });
+        }
+    }
+    if lines.is_empty() {
+        Err(t!("kube_node_pressure_missing").to_string())
+    } else {
+        Ok(lines)
+    }
+}
+
+fn gather_kubelet_warnings() -> SectionResult {
+    if !is_command_available("journalctl") {
+        return Err(t!("kube_node_logs_missing").to_string());
+    }
+    let output = Command::new("journalctl")
+        .args(["-u", "kubelet", "-p", "warning", "-n", "20", "--no-pager"])
+        .output()
+        .map_err(|_| t!("kube_node_logs_missing").to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let lines: Vec<InsightLine> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(8)
+        .map(|line| InsightLine {
+            level: InsightLevel::Warning,
+            message: truncate(line.trim(), 120),
+        })
+        .collect();
+    if lines.is_empty() {
+        Err(t!("kube_node_logs_clean").to_string())
+    } else {
+        Ok(lines)
+    }
+}
+
+fn gather_problem_pods(limit: usize) -> SectionResult {
+    if !is_command_available("kubectl") {
+        return Err(t!("kube_node_pod_missing").to_string());
+    }
+    let output = Command::new("kubectl")
+        .args(["get", "pods", "--all-namespaces", "--no-headers"])
+        .output()
+        .map_err(|_| t!("kube_node_pod_missing").to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let mut lines = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 5 {
+            continue;
+        }
+        let status = parts[3];
+        if status == "Running" || status == "Completed" {
+            continue;
+        }
+        let namespace = parts[0];
+        let name = parts[1];
+        let ready = parts[2];
+        let restarts = parts.get(4).copied().unwrap_or("0");
+        lines.push(InsightLine {
+            level: InsightLevel::Warning,
+            message: format!(
+                "{namespace}/{name} — status={status} ready={ready} restarts={restarts}"
+            ),
+        });
+        if lines.len() >= limit {
+            break;
+        }
+    }
+    if lines.is_empty() {
+        Err(t!("kube_node_pod_clean").to_string())
+    } else {
+        Ok(lines)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PressureSample {
+    avg10: f32,
+    avg60: f32,
+    avg300: f32,
+}
+
+fn read_pressure(resource: &str) -> Option<(PressureSample, Option<PressureSample>)> {
+    let path = format!("/proc/pressure/{resource}");
+    let data = fs::read_to_string(path).ok()?;
+    let mut some = None;
+    let mut full = None;
+    for line in data.lines() {
+        if line.starts_with("some") {
+            some = parse_pressure_line(line);
+        } else if line.starts_with("full") {
+            full = parse_pressure_line(line);
+        }
+    }
+    some.map(|entry| (entry, full))
+}
+
+fn parse_pressure_line(line: &str) -> Option<PressureSample> {
+    let mut avg10 = None;
+    let mut avg60 = None;
+    let mut avg300 = None;
+    for token in line.split_whitespace() {
+        if let Some(value) = token.strip_prefix("avg10=") {
+            avg10 = value.parse::<f32>().ok();
+        } else if let Some(value) = token.strip_prefix("avg60=") {
+            avg60 = value.parse::<f32>().ok();
+        } else if let Some(value) = token.strip_prefix("avg300=") {
+            avg300 = value.parse::<f32>().ok();
+        }
+    }
+    Some(PressureSample {
+        avg10: avg10?,
+        avg60: avg60?,
+        avg300: avg300?,
+    })
+}
+
 fn detect_proton_version() -> Option<String> {
     let mut home = user_home_dir()?;
     home.push(".steam/steam/steamapps/common");
@@ -2181,7 +3238,9 @@ fn detect_proton_version() -> Option<String> {
 
 fn is_safe_auto_fix(cmd: &str) -> bool {
     // Block shell metacharacters to prevent command injection
-    const DANGEROUS_CHARS: &[char] = &[';', '|', '&', '$', '`', '>', '<', '\n', '\r', '(', ')', '{', '}'];
+    const DANGEROUS_CHARS: &[char] = &[
+        ';', '|', '&', '$', '`', '>', '<', '\n', '\r', '(', ')', '{', '}',
+    ];
 
     if cmd.chars().any(|c| DANGEROUS_CHARS.contains(&c)) {
         return false;
@@ -2198,9 +3257,9 @@ fn is_safe_auto_fix(cmd: &str) -> bool {
     ];
 
     // Check for exact match OR prefix with space (to allow arguments)
-    whitelist.iter().any(|allowed| {
-        cmd == *allowed || cmd.starts_with(&format!("{} ", allowed))
-    })
+    whitelist
+        .iter()
+        .any(|allowed| cmd == *allowed || cmd.starts_with(&format!("{} ", allowed)))
 }
 
 fn recent_logs() -> Option<String> {
@@ -2303,9 +3362,9 @@ fn draw_tui(
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(7),  // Graphs
-            Constraint::Length(8),  // Vitals
-            Constraint::Min(10),    // Findings
+            Constraint::Length(7), // Graphs
+            Constraint::Length(8), // Vitals
+            Constraint::Min(10),   // Findings
         ])
         .split(frame.area());
 
@@ -2822,14 +3881,29 @@ mod tests {
         let rules = load_rules().expect("Failed to load rules.toml - check syntax");
 
         // Must have at least some rules
-        assert!(!rules.is_empty(), "rules.toml must contain at least one rule");
+        assert!(
+            !rules.is_empty(),
+            "rules.toml must contain at least one rule"
+        );
 
         for rule in &rules {
             // Required fields must not be empty
             assert!(!rule.name.is_empty(), "Rule name cannot be empty");
-            assert!(!rule.trigger.is_empty(), "Rule '{}' has empty trigger", rule.name);
-            assert!(!rule.message.is_empty(), "Rule '{}' has empty message", rule.name);
-            assert!(!rule.solution.is_empty(), "Rule '{}' has empty solution", rule.name);
+            assert!(
+                !rule.trigger.is_empty(),
+                "Rule '{}' has empty trigger",
+                rule.name
+            );
+            assert!(
+                !rule.message.is_empty(),
+                "Rule '{}' has empty message",
+                rule.name
+            );
+            assert!(
+                !rule.solution.is_empty(),
+                "Rule '{}' has empty solution",
+                rule.name
+            );
 
             // Severity must be between 1 and 10
             assert!(

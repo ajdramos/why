@@ -1,8 +1,8 @@
 //! Dependency checking module
 //! Verifies availability of external command-line tools
 
-use colored::*;
 use anyhow::Result;
+use colored::*;
 use rust_i18n::t;
 
 use crate::is_command_available;
@@ -14,44 +14,67 @@ pub fn check_deps() -> Result<()> {
 
     // Define all external commands with their category and purpose
     let deps = vec![
-        (t!("deps_core_system").to_string(), vec![
-            ("df", t!("deps_disk_usage").to_string(), true),
-            ("dmesg", t!("deps_kernel_logs").to_string(), true),
-            ("lsblk", t!("deps_block_device").to_string(), true),
-            ("pgrep", t!("deps_process_search").to_string(), true),
-            ("netstat", t!("deps_network_stats").to_string(), false),
-        ]),
-        (t!("deps_hardware_monitoring").to_string(), vec![
-            ("sensors", t!("deps_sensors").to_string(), false),
-            ("nvidia-smi", t!("deps_nvidia_smi").to_string(), false),
-            ("rocm-smi", t!("deps_rocm_smi").to_string(), false),
-            ("intel_gpu_top", t!("deps_intel_gpu").to_string(), false),
-        ]),
-        (t!("deps_power_management").to_string(), vec![
-            ("upower", t!("deps_upower").to_string(), false),
-        ]),
-        (t!("deps_network").to_string(), vec![
-            ("nmcli", t!("deps_nmcli").to_string(), false),
-        ]),
-        (t!("deps_audio_video").to_string(), vec![
-            ("pw-metadata", t!("deps_pw_metadata").to_string(), false),
-            ("glxinfo", t!("deps_glxinfo").to_string(), false),
-            ("vulkaninfo", t!("deps_vulkaninfo").to_string(), false),
-        ]),
-        (t!("deps_system_services").to_string(), vec![
-            ("systemd-analyze", t!("deps_systemd_analyze").to_string(), false),
-            ("journalctl", t!("deps_journalctl").to_string(), false),
-        ]),
-        (t!("deps_bluetooth").to_string(), vec![
-            ("bluetoothctl", t!("deps_bluetoothctl").to_string(), false),
-        ]),
-        (t!("deps_gaming").to_string(), vec![
-            ("prime-run", t!("deps_prime_run").to_string(), false),
-        ]),
-        (t!("deps_containers").to_string(), vec![
-            ("docker", t!("deps_docker").to_string(), false),
-            ("flatpak", t!("deps_flatpak").to_string(), false),
-        ]),
+        (
+            t!("deps_core_system").to_string(),
+            vec![
+                ("df", t!("deps_disk_usage").to_string(), true),
+                ("dmesg", t!("deps_kernel_logs").to_string(), true),
+                ("lsblk", t!("deps_block_device").to_string(), true),
+                ("pgrep", t!("deps_process_search").to_string(), true),
+                ("netstat", t!("deps_network_stats").to_string(), false),
+            ],
+        ),
+        (
+            t!("deps_hardware_monitoring").to_string(),
+            vec![
+                ("sensors", t!("deps_sensors").to_string(), false),
+                ("nvidia-smi", t!("deps_nvidia_smi").to_string(), false),
+                ("rocm-smi", t!("deps_rocm_smi").to_string(), false),
+                ("intel_gpu_top", t!("deps_intel_gpu").to_string(), false),
+            ],
+        ),
+        (
+            t!("deps_power_management").to_string(),
+            vec![("upower", t!("deps_upower").to_string(), false)],
+        ),
+        (
+            t!("deps_network").to_string(),
+            vec![("nmcli", t!("deps_nmcli").to_string(), false)],
+        ),
+        (
+            t!("deps_audio_video").to_string(),
+            vec![
+                ("pw-metadata", t!("deps_pw_metadata").to_string(), false),
+                ("glxinfo", t!("deps_glxinfo").to_string(), false),
+                ("vulkaninfo", t!("deps_vulkaninfo").to_string(), false),
+            ],
+        ),
+        (
+            t!("deps_system_services").to_string(),
+            vec![
+                (
+                    "systemd-analyze",
+                    t!("deps_systemd_analyze").to_string(),
+                    false,
+                ),
+                ("journalctl", t!("deps_journalctl").to_string(), false),
+            ],
+        ),
+        (
+            t!("deps_bluetooth").to_string(),
+            vec![("bluetoothctl", t!("deps_bluetoothctl").to_string(), false)],
+        ),
+        (
+            t!("deps_gaming").to_string(),
+            vec![("prime-run", t!("deps_prime_run").to_string(), false)],
+        ),
+        (
+            t!("deps_containers").to_string(),
+            vec![
+                ("docker", t!("deps_docker").to_string(), false),
+                ("flatpak", t!("deps_flatpak").to_string(), false),
+            ],
+        ),
     ];
 
     let mut total = 0;

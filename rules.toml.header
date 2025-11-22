@@ -1,0 +1,12 @@
+# Why v1.3 - Diagnostic Rules Database
+# 113 production rules (last updated: 2025-11-21)
+#
+# Each rule defines a condition that triggers a diagnostic finding:
+# - name: unique identifier (kebab-case)
+# - trigger: DSL condition (cpu>80, mem>90, process~chrome, etc.)
+# - message: user-facing diagnosis (max 200 chars)
+# - solution: how to fix it (max 500 chars)
+# - severity: priority 1-10 (10=critical, 5=warning, 1=info)
+# - auto_fix: optional safe command (whitelist only)
+#
+# See CONTRIBUTING.md for rule submission guidelines.

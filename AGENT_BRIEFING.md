@@ -8,7 +8,9 @@ Goal: become the `htop` of "why is my Linux acting up?" — instant, human-reada
 
 - **113 production rules** covering 95% of daily desktop pain + gaming/GPU issues
 - Full **GPU diagnostics** for NVIDIA (nvidia-smi), AMD (rocm-smi + sysfs), Intel (sysfs kernel hwmon)
-- **Gaming performance analysis** with Steam/Proton/CS2/GameMode/MangoHud detection
+- **Gaming performance analysis** with Steam/Proton/CS2/GameMode/MangoHud detection — gaming rules intelligently filtered (only shown in `why gaming`)
+- **Performance profiling** — track execution time with `WHY_BENCHMARK=1` or `RUST_LOG=debug` (target: <200ms)
+- **Security hardened** — command injection prevention, no shell usage, safe auto-fix whitelist
 - Sub-200 ms full scan
 - Fully distro-agnostic (systemd or not, apt/dnf/pacman/zypper)
 - Static musl binary (~1.2 MB)
@@ -32,10 +34,10 @@ Special flags:
 
 ## Where the magic lives
 
-- `src/main.rs` — entrypoint, CLI, TUI, all logic (~2700 lines)
-- `src/deps.rs` — dependency checking module (external tools validation)
+- `src/main.rs` — entrypoint, CLI, TUI, all logic (~3950 lines)
+- `src/deps.rs` — dependency checking module (external tools validation, fully i18n)
 - `rules.toml` — the soul of the project (113 rules, English only)
-- `i18n/en.toml` + `i18n/pt.toml` — translations (rust-i18n crate)
+- `i18n/en.toml` + `i18n/pt.toml` — translations (rust-i18n crate, ~55 keys each)
 - `CONTRIBUTING.md` — guide for community contributors (rule format, examples)
 - `.github/workflows/validate-rules.yml` — CI validation for rule PRs
 - `.github/workflows/release.yml` — builds static binary + deb + rpm + AppImage on tag
@@ -50,9 +52,20 @@ Special flags:
 6. ✅ ~~Dependency checking~~ **DONE v1.3** — `why check-deps` + warnings in dashboard
 7. ✅ ~~CI for community rules~~ **DONE v1.3** — Auto-validation + CONTRIBUTING.md guide
 8. ✅ ~~Forensic snapshots~~ **DONE v1.3** — `why --snapshot` generates JSON with complete system state for bug reports
-9. Improve TUI — add clickable findings, more interactive features
-10. macOS port skeleton (Swift + SwiftUI menu-bar app calling the same Rust core via Tauri or lib)
-11. GitHub Actions to auto-submit to AUR, Copr, PPA, Flathub on release
+9. ✅ ~~Security hardening~~ **DONE v1.3** — Command injection prevention, no shell usage, path traversal protection
+10. ✅ ~~Performance profiling~~ **DONE v1.3** — `WHY_BENCHMARK=1` / `RUST_LOG=debug` tracking
+11. ✅ ~~Gaming rules filter~~ **DONE v1.3** — Gaming rules only shown in `why gaming` to reduce noise
+12. Improve TUI — add clickable findings, more interactive features
+13. macOS port skeleton (Swift + SwiftUI menu-bar app calling the same Rust core via Tauri or lib)
+14. GitHub Actions to auto-submit to AUR, Copr, PPA, Flathub on release
+
+## Security guidelines (CRITICAL)
+
+- **NEVER use shell execution** (`sh -c`) — always use direct `Command::new()`
+- **Validate all external input** — `is_command_available()` uses strict alphanumeric validation
+- **No path traversal** — home dirs from trusted env vars only (`$HOME`/`$USERPROFILE`)
+- **Auto-fix whitelist** — only harmless commands in `is_safe_auto_fix()` + user confirmation required
+- **No string interpolation in commands** — always use `.arg()` instead of `format!()`
 
 ## Rules for contributing (follow strictly)
 

@@ -17,6 +17,11 @@ why gpu              # GPU diagnostics (NVIDIA/AMD/Intel)
 why gaming           # gaming performance issues (Steam/Proton)
 why hot              # temperature issues
 why boot             # why does boot take forever?
+why boot-critical    # deep dive into the systemd critical path
+why storage          # SMART/Btrfs/ZFS/RAID health summary
+why security         # SELinux/AppArmor/firewall posture + listening ports
+why rca              # root-cause timeline (OOM, panics, throttling)
+why kube-node        # node pressure, kubelet state and failing pods
 why check-deps       # verify which diagnostic tools are installed
 why --snapshot       # generate forensic snapshot (JSON) for bug reports
 why --watch          # live htop-style dashboard with explanations
@@ -42,17 +47,19 @@ sudo mv why /usr/local/bin/
 
 - **113 real-world rules** covering CPU, RAM, disk, network, Wi-Fi, Bluetooth, battery, fans, temperatures, snaps, Flatpaks, NVIDIA/AMD/Intel GPUs, gaming (Steam/Proton/CS2), Wayland, PipeWire, Firefox hardware acceleration, ZFS, LUKS, boot time, btrfs snapshots, systemd-oomd, baloo, Cloudflare WARP, and more
 - **GPU diagnostics** for NVIDIA (nvidia-smi), AMD (rocm-smi + sysfs), and Intel (sysfs kernel hwmon) with vendor-specific tips
-- **Gaming performance analysis** including GameMode, MangoHud, Proton version detection, CS2 optimization, works with or without Steam
-- **Forensic snapshots** (`why --snapshot`) — generates complete JSON report of system state for bug reports and support tickets
+- **Gaming performance analysis** including GameMode, MangoHud, Proton version detection, CS2 optimization, works with or without Steam — gaming rules intelligently filtered to avoid noise in general diagnostics
+- **Forensic snapshots** (`why --snapshot`) — generates complete JSON report with full system state (always includes GPU metrics) for bug reports and support tickets
 - **Dependency checking** (`why check-deps`) lists all external tools and shows what's missing
-- **Missing tools warnings** in dashboard alert when critical diagnostic tools aren't installed
+- **Missing tools warnings** in dashboard alert when critical diagnostic tools aren't installed (lm-sensors, upower, nvidia-smi, etc.)
+- **Performance profiling** — track execution time with `WHY_BENCHMARK=1` or `RUST_LOG=debug` (target: <200ms)
 - **Locale-safe parsing** — works correctly on systems using Portuguese, German, French, etc. (comma decimals) for all numeric outputs
+- **Security hardened** — command injection prevention, safe auto-fix whitelist, path traversal protection, no shell usage
 - Zero dependencies outside the Rust std lib + a few crates
 - Fully distro-agnostic (systemd or not, apt/dnf/pacman/zypper)
 - Sub-200 ms response time
 - Live TUI mode (`why --watch`)
-- **Internationalisation** — Full i18n support for diagnostic output (currently English and Portuguese via `--lang pt`); JSON snapshot metadata is English-only by design
-- Safe auto-fix for harmless issues (with confirmation)
+- **Internationalisation** — Full i18n support for diagnostic output including snapshots (currently English and Portuguese via `--lang pt`)
+- Safe auto-fix for harmless issues (with confirmation and whitelist validation)
 - **CI validation** for community rule contributions
 - MIT licensed – companies love it
 
@@ -73,6 +80,108 @@ sudo mv why /usr/local/bin/
 ℹ️ 6           Baloo indexer running                          balooctl disable
 
 Tip: Run 'why --update-rules' for the latest community rules.
+```
+
+### How it works
+
+For advanced users and system administrators who want to understand what's happening under the hood.
+
+#### Architecture
+
+**why** is built around a declarative **rules engine** that correlates system metrics with known issues:
+
+1. **Metrics collection** (~50ms) — Gathers system state from multiple sources
+2. **Rule evaluation** (~100ms) — Evaluates 113+ rules against current metrics
+3. **Correlation** (~10ms) — Links related findings (e.g., high CPU + specific process)
+4. **Presentation** (~40ms) — Formats output with severity, solution, and context
+
+Total execution time: **<200ms** (tracked via `WHY_BENCHMARK=1` or `RUST_LOG=debug`)
+
+#### Data sources by command
+
+| Command | Data Sources | What it checks |
+|---------|--------------|----------------|
+| `why` / `why all` | CPU, RAM, disk, network, processes, dmesg, journal | Full system scan: 113 rules evaluated |
+| `why wifi` | NetworkManager (nmcli), /proc/net, kernel logs | Signal strength, connection drops, driver issues, regulatory domain |
+| `why battery` | UPower, /sys/class/power_supply | Drain rate, charge cycles, health, power profiles |
+| `why gpu` | nvidia-smi, rocm-smi, /sys/class/drm, /sys/class/hwmon | GPU vendor, driver version, memory usage, temperature, power state |
+| `why gaming` | Steam logs, Proton compat_log.txt, processes (gamemoded, mangohud) | GameMode active, MangoHud, Proton crashes, Vulkan loader, GPU offloading |
+| `why fan` / `why hot` | lm-sensors, /sys/class/thermal, /sys/class/hwmon | CPU/GPU temps, fan speeds, throttling |
+| `why boot` | systemd-analyze, journalctl | Boot time breakdown, slow services (>5s warning, >15s critical) |
+| `why check-deps` | Command availability (which) | Validates external tools: sensors, nvidia-smi, upower, nmcli, etc. |
+| `why --snapshot` | All sources above + complete dmesg/journal history | Forensic JSON snapshot for bug reports |
+
+#### Gaming-specific internals
+
+`why gaming` performs specialized checks:
+
+- **Steam detection**: Checks if Steam process is running (pgrep)
+- **Proton failure analysis**: Parses `~/.steam/steam/logs/compat_log.txt` for ERROR/crash patterns
+- **Vulkan loader**: Tests `vulkaninfo` availability (critical for modern games)
+- **GPU offloading**: Detects NVIDIA Optimus (prime-run, NV_PRIME_RENDER_OFFLOAD)
+- **Performance tools**: Verifies GameMode daemon, MangoHud presence
+- **CS2 optimization**: Checks for `-vulkan +fps_max 0` launch options
+
+**Important**: Gaming rules are filtered by default and only shown when running `why gaming` explicitly to avoid noise in general diagnostics.
+
+#### GPU diagnostics internals
+
+Multi-vendor GPU detection with vendor-specific optimizations:
+
+**NVIDIA (nvidia-smi)**:
+- Parses `nvidia-smi --query-gpu=...` for temperature, memory, utilization, power
+- Detects driver version, CUDA version, GPU model
+- Checks for power throttling, thermal throttling
+
+**AMD (rocm-smi + sysfs)**:
+- Primary: `rocm-smi` for telemetry (if available)
+- Fallback: `/sys/class/drm/card*/device/hwmon/hwmon*/` for temps/power
+- Detects AMDGPU driver, GPU model from sysfs
+
+**Intel (sysfs)**:
+- Reads `/sys/class/drm/card*/gt_*` for Intel Arc/Xe metrics
+- Temperature from `/sys/class/hwmon/hwmon*/temp*_input`
+
+**Caching**: GPU info cached for 5 seconds in TUI mode to avoid hammering vendor tools.
+
+#### Rules engine format
+
+Rules are declarative TOML (see `rules.toml`):
+
+```toml
+[[rule]]
+name = "wifi_signal_weak"
+trigger = "wifi_connected=true && wifi_signal<50"
+message = "Wi-Fi signal weak (<50%)"
+solution = "Move closer to router or check for interference"
+severity = 7
+```
+
+Trigger DSL supports:
+- Comparisons: `cpu>80`, `ram<1000`, `wifi_signal>=50`
+- Booleans: `wifi_connected=true`, `nvidia_gpu=false`
+- Conjunctions: `cpu>80 && ram>90`
+- Process checks: `process_running=firefox`, `process_cpu>50 && process_name=steam`
+- GPU checks: `gpu_vendor=nvidia`, `gpu_temp>80`, `gpu_memory_util>85`
+
+#### Security features
+
+- **Command injection prevention**: All external commands validated with strict alphanumeric-only input
+- **Safe auto-fix whitelist**: Only harmless commands allowed (e.g., `balooctl`, `systemctl restart`), requires user confirmation
+- **Path traversal protection**: User home dirs from trusted env vars ($HOME/$USERPROFILE)
+- **No shell usage**: Direct command execution without shell intermediaries where possible
+
+#### Performance profiling
+
+Enable performance tracking for debugging:
+
+```bash
+WHY_BENCHMARK=1 why all
+# Output: ⏱️  Execution time: 178ms
+
+RUST_LOG=debug why all
+# Output: ⏱️  Execution time: 182ms
+#         ⚠️  Warning: Exceeded 200ms target (210ms)
 ```
 
 ### Contributing
