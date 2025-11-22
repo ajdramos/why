@@ -1,4 +1,4 @@
-# why — Production rules v1.2 (128 rules — November 2025)
+# why — Production rules v1.3 (113 rules — November 2025)
 # Contribute: https://github.com/tu/why
 
 [[rule]]
@@ -413,9 +413,9 @@ solution = "Switch Proton version (Steam → Properties → Compatibility) or cl
 severity = 8
 
 [[rule]]
-name = "gaming_vulkan_missing"
+name = "vulkan_loader_missing"
 trigger = "vulkan_loader_missing=true"
-message = "Vulkan loader missing — games forced to OpenGL"
+message = "Vulkan loader missing — applications forced to OpenGL"
 solution = "Install vulkan-tools + mesa-vulkan-drivers (or nvidia-vulkan-icd)"
 severity = 8
 

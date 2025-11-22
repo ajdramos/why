@@ -3,53 +3,54 @@
 
 use colored::*;
 use anyhow::Result;
+use rust_i18n::t;
 
 use crate::is_command_available;
 
 /// Check and display all external command dependencies
 pub fn check_deps() -> Result<()> {
-    println!("{}", "External Command Dependencies".bold().underline());
+    println!("{}", t!("deps_header").bold().underline());
     println!();
 
     // Define all external commands with their category and purpose
     let deps = vec![
-        ("Core System", vec![
-            ("df", "Disk usage statistics", true),  // coreutils - always present
-            ("dmesg", "Kernel logs", true),  // util-linux - always present
-            ("lsblk", "Block device info", true),  // util-linux - always present
-            ("pgrep", "Process search", true),  // procps - always present
-            ("netstat", "Network statistics", false),  // net-tools - may be missing
+        (t!("deps_core_system").to_string(), vec![
+            ("df", t!("deps_disk_usage").to_string(), true),
+            ("dmesg", t!("deps_kernel_logs").to_string(), true),
+            ("lsblk", t!("deps_block_device").to_string(), true),
+            ("pgrep", t!("deps_process_search").to_string(), true),
+            ("netstat", t!("deps_network_stats").to_string(), false),
         ]),
-        ("Hardware Monitoring", vec![
-            ("sensors", "CPU/motherboard temperatures and fan speeds", false),
-            ("nvidia-smi", "NVIDIA GPU telemetry", false),
-            ("rocm-smi", "AMD GPU telemetry (ROCm)", false),
-            ("intel_gpu_top", "Intel GPU monitoring", false),
+        (t!("deps_hardware_monitoring").to_string(), vec![
+            ("sensors", t!("deps_sensors").to_string(), false),
+            ("nvidia-smi", t!("deps_nvidia_smi").to_string(), false),
+            ("rocm-smi", t!("deps_rocm_smi").to_string(), false),
+            ("intel_gpu_top", t!("deps_intel_gpu").to_string(), false),
         ]),
-        ("Power Management", vec![
-            ("upower", "Battery and power information", false),
+        (t!("deps_power_management").to_string(), vec![
+            ("upower", t!("deps_upower").to_string(), false),
         ]),
-        ("Network", vec![
-            ("nmcli", "NetworkManager CLI (Wi-Fi diagnostics)", false),
+        (t!("deps_network").to_string(), vec![
+            ("nmcli", t!("deps_nmcli").to_string(), false),
         ]),
-        ("Audio/Video", vec![
-            ("pw-metadata", "PipeWire audio latency", false),
-            ("glxinfo", "OpenGL/Mesa information", false),
-            ("vulkaninfo", "Vulkan loader and drivers", false),
+        (t!("deps_audio_video").to_string(), vec![
+            ("pw-metadata", t!("deps_pw_metadata").to_string(), false),
+            ("glxinfo", t!("deps_glxinfo").to_string(), false),
+            ("vulkaninfo", t!("deps_vulkaninfo").to_string(), false),
         ]),
-        ("System Services", vec![
-            ("systemd-analyze", "Boot time analysis", false),
-            ("journalctl", "Systemd journal logs", false),
+        (t!("deps_system_services").to_string(), vec![
+            ("systemd-analyze", t!("deps_systemd_analyze").to_string(), false),
+            ("journalctl", t!("deps_journalctl").to_string(), false),
         ]),
-        ("Bluetooth", vec![
-            ("bluetoothctl", "Bluetooth device management", false),
+        (t!("deps_bluetooth").to_string(), vec![
+            ("bluetoothctl", t!("deps_bluetoothctl").to_string(), false),
         ]),
-        ("Gaming", vec![
-            ("prime-run", "NVIDIA Optimus offload", false),
+        (t!("deps_gaming").to_string(), vec![
+            ("prime-run", t!("deps_prime_run").to_string(), false),
         ]),
-        ("Containers", vec![
-            ("docker", "Docker container statistics", false),
-            ("flatpak", "Flatpak package management", false),
+        (t!("deps_containers").to_string(), vec![
+            ("docker", t!("deps_docker").to_string(), false),
+            ("flatpak", t!("deps_flatpak").to_string(), false),
         ]),
     ];
 
@@ -79,9 +80,12 @@ pub fn check_deps() -> Result<()> {
         println!();
     }
 
-    println!("{}", "Summary".bold().underline());
+    println!("{}", t!("deps_summary").bold().underline());
     let percentage = (available as f32 / total as f32 * 100.0) as u32;
-    let summary = format!("{}/{} commands available ({}%)", available, total, percentage);
+    let summary = t!("deps_commands_available")
+        .replace("{available}", &available.to_string())
+        .replace("{total}", &total.to_string())
+        .replace("{percentage}", &percentage.to_string());
 
     if percentage >= 80 {
         println!("{}", summary.green().bold());
@@ -92,24 +96,24 @@ pub fn check_deps() -> Result<()> {
     }
 
     println!();
-    println!("{}", "Legend:".dimmed());
-    println!("  {} Available", "✓".green());
-    println!("  {} Missing (optional)", "○".yellow());
-    println!("  {} Missing (should be present)", "✗".red());
+    println!("{}", t!("deps_legend").dimmed());
+    println!("  {} {}", "✓".green(), t!("deps_available"));
+    println!("  {} {}", "○".yellow(), t!("deps_missing_optional"));
+    println!("  {} {}", "✗".red(), t!("deps_missing_required"));
 
     Ok(())
 }
 
 /// Check for missing critical diagnostic tools
-/// Returns a list of (command, purpose) tuples for tools that are not available
+/// Returns a list of (command, i18n_key) tuples for tools that are not available
 pub fn check_missing_critical_tools() -> Vec<(&'static str, &'static str)> {
     let critical = vec![
-        ("sensors", "hardware temps/fans"),
-        ("upower", "battery diagnostics"),
-        ("nmcli", "Wi-Fi diagnostics"),
-        ("systemd-analyze", "boot analysis"),
-        ("nvidia-smi", "NVIDIA GPU monitoring"),
-        ("rocm-smi", "AMD GPU monitoring"),
+        ("sensors", "tool_purpose_sensors"),
+        ("upower", "tool_purpose_upower"),
+        ("nmcli", "tool_purpose_nmcli"),
+        ("systemd-analyze", "tool_purpose_systemd_analyze"),
+        ("nvidia-smi", "tool_purpose_nvidia_smi"),
+        ("rocm-smi", "tool_purpose_rocm_smi"),
     ];
 
     critical

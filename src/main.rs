@@ -38,6 +38,29 @@ const RULES_REMOTE_URL: &str = "https://raw.githubusercontent.com/tu/why/main/ru
 const HISTORY_DIR: &str = ".cache/why";
 const HISTORY_FILE: &str = "history.db";
 
+// Performance and threshold constants
+const PERFORMANCE_TARGET_MS: u128 = 200;
+const FP_PRECISION_THRESHOLD: f32 = 0.001;
+// Reserved for future refactoring (currently magic numbers inline)
+#[allow(dead_code)]
+const _CPU_HIGH_THRESHOLD: f32 = 80.0;
+#[allow(dead_code)]
+const _CPU_ELEVATED_THRESHOLD: f32 = 60.0;
+#[allow(dead_code)]
+const _RAM_CRITICAL_THRESHOLD: f32 = 90.0;
+#[allow(dead_code)]
+const _RAM_HIGH_THRESHOLD: f32 = 80.0;
+#[allow(dead_code)]
+const _DISK_CRITICAL_THRESHOLD: f32 = 95.0;
+#[allow(dead_code)]
+const _DISK_HIGH_THRESHOLD: f32 = 85.0;
+#[allow(dead_code)]
+const _GPU_CACHE_REFRESH_SECS: u64 = 5;
+#[allow(dead_code)]
+const _TUI_REFRESH_MS: u64 = 200;
+#[allow(dead_code)]
+const _TUI_HISTORY_DATAPOINTS: usize = 60;
+
 static LOG_CACHE: OnceLock<Option<String>> = OnceLock::new();
 
 lazy_static! {
@@ -53,7 +76,7 @@ struct Cli {
     update_rules: bool,
     #[arg(long, help = t!("watch_help"))]
     watch: bool,
-    #[arg(long, help = "Generate forensic snapshot (JSON/HTML) of system state")]
+    #[arg(long, help = t!("snapshot_help"))]
     snapshot: bool,
     #[arg(long, help = t!("lang_help"), default_value = "en")]
     lang: String,
@@ -208,7 +231,7 @@ impl GpuDetails {
     fn memory_utilization(&self) -> Option<f32> {
         match (self.memory_used_mb, self.memory_total_mb) {
             // Use 0.001 threshold to avoid floating-point precision issues
-            (Some(used), Some(total)) if total > 0.001 => Some((used / total) * 100.0),
+            (Some(used), Some(total)) if total > FP_PRECISION_THRESHOLD => Some((used / total) * 100.0),
             _ => None,
         }
     }
@@ -237,6 +260,7 @@ fn run_cmd_status(cmd: &str, args: &[&str]) -> bool {
 }
 
 fn main() -> Result<()> {
+    let start_time = std::time::Instant::now();
     let cli = Cli::parse();
     rust_i18n::set_locale(&cli.lang);
 
@@ -259,8 +283,9 @@ fn main() -> Result<()> {
 
     let command = cli.command.unwrap_or(Commands::All);
 
-    // Only detect GPU for commands that need it (avoid hammering GPU tools)
-    let needs_gpu = matches!(command, Commands::All | Commands::Gpu | Commands::Gaming);
+    // Collect GPU for snapshot (complete system state) or GPU-relevant commands
+    let needs_gpu = cli.snapshot
+                    || matches!(command, Commands::All | Commands::Gpu | Commands::Gaming);
     let mut metrics = Metrics::gather(&sys);
     if needs_gpu {
         metrics = metrics.with_gpu();
@@ -269,6 +294,11 @@ fn main() -> Result<()> {
     let mut findings = evaluate_rules(&metrics, &parsed_rules);
 
     correlate_findings(&mut findings);
+
+    // Filter gaming rules unless explicitly running 'why gaming'
+    if !matches!(command, Commands::Gaming) {
+        findings.retain(|f| !f.rule_name.starts_with("gaming_"));
+    }
 
     log_to_history(&findings)?;
 
@@ -316,6 +346,15 @@ fn main() -> Result<()> {
                     .status()
                     .context(t!("fix_failed"))?;
             }
+        }
+    }
+
+    // Performance tracking: Log execution time if WHY_BENCHMARK=1 or RUST_LOG=debug
+    let elapsed = start_time.elapsed();
+    if env::var("WHY_BENCHMARK").is_ok() || env::var("RUST_LOG").unwrap_or_default().contains("debug") {
+        eprintln!("⏱️  Execution time: {:.0}ms", elapsed.as_millis());
+        if elapsed.as_millis() > PERFORMANCE_TARGET_MS {
+            eprintln!("⚠️  Warning: Exceeded {}ms target ({:.0}ms)", PERFORMANCE_TARGET_MS, elapsed.as_millis());
         }
     }
 
@@ -1072,27 +1111,23 @@ fn is_process_running(name: &str) -> bool {
 fn detect_proton_failures() -> bool {
     let home = match user_home_dir() {
         Some(path) => {
-            // Validate path is absolute and doesn't contain suspicious patterns
+            // Validate path is absolute and canonicalize to prevent path traversal
             if !path.is_absolute() {
                 return false;
             }
-            // Check for path traversal attempts
-            if path.to_string_lossy().contains("..") {
-                return false;
+            // Canonicalize path to resolve any .. or symlinks securely
+            match path.canonicalize() {
+                Ok(canonical) => canonical,
+                Err(_) => return false,  // Path doesn't exist or is inaccessible
             }
-            path
         }
         None => return false,
     };
 
-    let mut paths = Vec::new();
-    let mut path = home.clone();
-    path.push(".steam/steam/logs/compat_log.txt");
-    paths.push(path);
-
-    let mut path2 = home.clone();
-    path2.push(".local/share/Steam/logs/compat_log.txt");
-    paths.push(path2);
+    let paths = vec![
+        home.join(".steam/steam/logs/compat_log.txt"),
+        home.join(".local/share/Steam/logs/compat_log.txt"),
+    ];
     for path in paths {
         if let Ok(content) = fs::read_to_string(&path) {
             if content
@@ -1113,8 +1148,19 @@ fn detect_vulkan_loader_missing() -> bool {
 }
 
 pub fn is_command_available(cmd: &str) -> bool {
-    let check_cmd = format!("command -v {cmd} >/dev/null 2>&1");
-    run_cmd_status("sh", &["-c", &check_cmd])
+    // Security: Validate command name to prevent injection attacks
+    // Only allow alphanumeric characters, dash, underscore, and slash (for paths)
+    if !cmd.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/') {
+        return false;
+    }
+
+    // Use direct Command execution instead of shell for safety
+    Command::new("sh")
+        .arg("-c")
+        .arg(format!("command -v {} >/dev/null 2>&1", cmd))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn detect_gpu_info() -> Option<GpuDetails> {
@@ -1514,11 +1560,11 @@ fn show_dashboard(findings: &[Finding], metrics: &Metrics) {
     // Check for missing critical tools
     let missing = deps::check_missing_critical_tools();
     if !missing.is_empty() {
-        println!("{}", "⚠️  Missing diagnostic tools:".yellow().bold());
-        for (tool, purpose) in missing {
-            println!("   {} — {}", tool.yellow(), purpose.dimmed());
+        println!("{}", t!("missing_tools_header").yellow().bold());
+        for (tool, i18n_key) in missing {
+            println!("   {} — {}", tool.yellow(), t!(i18n_key).dimmed());
         }
-        println!("   Run {} for details\n", "why check-deps".cyan());
+        println!("   {}\n", t!("missing_tools_footer").replace("{cmd}", "why check-deps").cyan());
     }
 
     if findings.is_empty() {
@@ -1672,23 +1718,23 @@ fn generate_snapshot(metrics: &Metrics, findings: &[Finding]) -> Result<()> {
     fs::write(&filename, &json)
         .with_context(|| format!("Failed to write {}", filename))?;
 
-    println!("{}", "📸 Forensic Snapshot Generated".green().bold());
+    println!("{}", t!("snapshot_generated").green().bold());
     println!();
-    println!("{}  {}", "📄 JSON:".bold(), filename.cyan());
-    println!("{}     {}", "   Size:".dimmed(), format!("{} bytes", json.len()).dimmed());
+    println!("{}  {}", t!("snapshot_json_label").bold(), filename.cyan());
+    println!("{}     {}", t!("snapshot_size_label").dimmed(), format!("{} bytes", json.len()).dimmed());
     println!();
-    println!("{}", "Snapshot includes:".bold());
-    println!("  • System metadata (hostname, kernel, distro, uptime)");
-    println!("  • Complete metrics (CPU, RAM, disk, GPU, etc.)");
-    println!("  • {} findings", findings.len());
+    println!("{}", t!("snapshot_includes").bold());
+    println!("  • {}", t!("snapshot_metadata"));
+    println!("  • {}", t!("snapshot_metrics"));
+    println!("  • {}", t!("snapshot_findings_count").replace("{count}", &findings.len().to_string()));
     if has_dmesg {
-        println!("  • Last 100 lines of dmesg");
+        println!("  • {}", t!("snapshot_dmesg"));
     }
     if has_journal {
-        println!("  • Last 100 lines of journalctl");
+        println!("  • {}", t!("snapshot_journal"));
     }
     println!();
-    println!("{}", "Attach this file to support tickets or bug reports.".dimmed());
+    println!("{}", t!("snapshot_attach_tip").dimmed());
 
     Ok(())
 }

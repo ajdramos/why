@@ -6,14 +6,14 @@ Goal: become the `htop` of "why is my Linux acting up?" — instant, human-reada
 
 ## Current status — v1.3 Released! (Nov 2025)
 
-- **179 production rules** covering 95% of daily desktop pain + gaming/GPU issues
+- **113 production rules** covering 95% of daily desktop pain + gaming/GPU issues
 - Full **GPU diagnostics** for NVIDIA (nvidia-smi), AMD (rocm-smi + sysfs), Intel (sysfs kernel hwmon)
 - **Gaming performance analysis** with Steam/Proton/CS2/GameMode/MangoHud detection
 - Sub-200 ms full scan
 - Fully distro-agnostic (systemd or not, apt/dnf/pacman/zypper)
 - Static musl binary (~1.2 MB)
 - Live TUI with `why --watch` (ratatui)
-- i18n ready (English + full Portuguese, easy to add more)
+- i18n ready (English + full Portuguese; Spanish and other languages can be added via i18n/*.toml)
 - Safe auto-fix with whitelist + confirmation
 - MIT license (acquisition-friendly)
 
@@ -34,7 +34,7 @@ Special flags:
 
 - `src/main.rs` — entrypoint, CLI, TUI, all logic (~2700 lines)
 - `src/deps.rs` — dependency checking module (external tools validation)
-- `rules.toml` — the soul of the project (179 rules, English only)
+- `rules.toml` — the soul of the project (113 rules, English only)
 - `i18n/en.toml` + `i18n/pt.toml` — translations (rust-i18n crate)
 - `CONTRIBUTING.md` — guide for community contributors (rule format, examples)
 - `.github/workflows/validate-rules.yml` — CI validation for rule PRs

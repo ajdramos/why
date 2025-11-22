@@ -40,18 +40,18 @@ sudo mv why /usr/local/bin/
 
 ### Features (November 2025 – v1.3)
 
-- **179 real-world rules** covering CPU, RAM, disk, network, Wi-Fi, Bluetooth, battery, fans, temperatures, snaps, Flatpaks, NVIDIA/AMD/Intel GPUs, gaming (Steam/Proton/CS2), Wayland, PipeWire, Firefox hardware acceleration, ZFS, LUKS, boot time, btrfs snapshots, systemd-oomd, baloo, Cloudflare WARP, and more
+- **113 real-world rules** covering CPU, RAM, disk, network, Wi-Fi, Bluetooth, battery, fans, temperatures, snaps, Flatpaks, NVIDIA/AMD/Intel GPUs, gaming (Steam/Proton/CS2), Wayland, PipeWire, Firefox hardware acceleration, ZFS, LUKS, boot time, btrfs snapshots, systemd-oomd, baloo, Cloudflare WARP, and more
 - **GPU diagnostics** for NVIDIA (nvidia-smi), AMD (rocm-smi + sysfs), and Intel (sysfs kernel hwmon) with vendor-specific tips
 - **Gaming performance analysis** including GameMode, MangoHud, Proton version detection, CS2 optimization, works with or without Steam
 - **Forensic snapshots** (`why --snapshot`) — generates complete JSON report of system state for bug reports and support tickets
 - **Dependency checking** (`why check-deps`) lists all external tools and shows what's missing
 - **Missing tools warnings** in dashboard alert when critical diagnostic tools aren't installed
-- **Locale-safe parsing** — works correctly on systems using Portuguese, German, French, etc. (comma decimals)
+- **Locale-safe parsing** — works correctly on systems using Portuguese, German, French, etc. (comma decimals) for all numeric outputs
 - Zero dependencies outside the Rust std lib + a few crates
 - Fully distro-agnostic (systemd or not, apt/dnf/pacman/zypper)
 - Sub-200 ms response time
 - Live TUI mode (`why --watch`)
-- Internationalisation ready (`--lang pt`, `--lang es`, etc.)
+- **Internationalisation** — Full i18n support for diagnostic output (currently English and Portuguese via `--lang pt`); JSON snapshot metadata is English-only by design
 - Safe auto-fix for harmless issues (with confirmation)
 - **CI validation** for community rule contributions
 - MIT licensed – companies love it
